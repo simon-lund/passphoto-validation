@@ -6,13 +6,14 @@ from .models import GoogleWalletImageDefinitionsLiteral
 from .models import ImageSize
 from .models import MaskTypeEnum
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, status
 from fastapi import File
 from fastapi import Form
 from fastapi import UploadFile
 from fastapi.logger import logger
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.responses import JSONResponse
 from importlib.metadata import version
 from PIL import Image
 from PIL import ImageDraw
@@ -20,10 +21,14 @@ from starlette.background import BackgroundTask
 from typing import Annotated
 from typing import Literal
 
+import io
 import os
 import pathlib
 import tempfile
 import uvicorn
+
+from .core import PassportPhotoValidator
+from .core.utils import convert_to_bgr
 
 
 logger.setLevel("DEBUG")
@@ -73,6 +78,41 @@ async def read_root():
 @app.get("/openapi.json")
 async def openapi():
     return app.openapi()
+
+
+@app.post("/validate-passport-photo")
+async def validate_passport_photo(
+    file: UploadFile = File(...),
+    min_detection_confidence: float = Form(0.5, ge=0.0, le=1.0),
+    target_face_ratio: float = Form(0.4, ge=0.1, le=1.0),
+    target_aspect_ratio: float = Form(3/4, ge=0.1, le=2.0),
+):
+    """
+    Validate passport photo against ICAO standards.
+    Returns detailed report with issues and recommendations.
+    """
+    if not file.content_type.startswith('image/'):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File must be an image")
+
+    try:
+        # Read image
+        contents = await file.read()
+        image = Image.open(io.BytesIO(contents))
+        image_np = convert_to_bgr(image)
+
+        # Validate using core business logic with parameters from the request
+        validator = PassportPhotoValidator(
+            min_detection_confidence=min_detection_confidence,
+            target_face_ratio=target_face_ratio,
+            target_aspect_ratio=target_aspect_ratio,
+        )
+        report = validator(image_np)
+
+        # Convert to dict and return
+        return JSONResponse(content=report.to_dict())
+
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error processing image: {str(e)}")
 
 
 @app.post("/crop/", response_class=FileResponse)

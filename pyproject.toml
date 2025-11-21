@@ -32,7 +32,11 @@ dependencies = [
     "aiokafka",
     "pillow",
     "opencv-python",
-  ]
+    "mediapipe>=0.10.21",
+    "typer[all]>=0.9.0",
+    "rich>=13.0.0",
+    "brisque>=0.0.17",
+]
 
 [project.urls]
 Source = "https://github.com/edutap-eu/edutap.image_api"
@@ -43,8 +47,8 @@ Documentation = "https://docs.edutap.eu/packages/edutap_image_api/index.html"
 test = [
     "pytest",
     "requests-mock",
-]
-typecheck  = [
+    "jupyter",
+    "matplotlib",
     "mypy",
     "types-requests",
     "pytest-stub",
@@ -56,6 +60,7 @@ develop = [
 
 [project.scripts]
 image_api = "edutap.image_api.main:main"
+passport-validator = "edutap.image_api.cli:app"
 
 [build-system]
 requires = ["setuptools>=61"]
