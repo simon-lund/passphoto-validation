@@ -27,7 +27,7 @@ import pathlib
 import tempfile
 import uvicorn
 
-from .core import PassportPhotoValidator
+from .core import PassportPhotoValidator, ValidatorConfig
 from .core.utils import convert_to_bgr
 
 
@@ -101,11 +101,11 @@ async def validate_passport_photo(
         image_np = convert_to_bgr(image)
 
         # Validate using core business logic with parameters from the request
-        validator = PassportPhotoValidator(
+        validator = PassportPhotoValidator(ValidatorConfig(
             min_detection_confidence=min_detection_confidence,
             target_face_ratio=target_face_ratio,
             target_aspect_ratio=target_aspect_ratio,
-        )
+        ))
         report = validator(image_np)
 
         # Convert to dict and return

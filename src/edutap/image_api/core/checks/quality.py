@@ -1,14 +1,25 @@
-"""Image quality validation checks (sharpness, resolution)."""
-import warnings
+"""Image quality validation checks (sharpness, resolution, compression)."""
 from typing import Tuple, Literal
 
 import cv2
+import numpy as np
 from brisque import BRISQUE
 
-from ..models import ValidationIssue, ValidationContext
+from ..models import CheckSkipped, ValidationIssue, ValidationContext
 
 
-def check_resolution(context: ValidationContext, min_res: Tuple[int, int] = (600, 600), recommended_res: Tuple[int, int] = (900, 900)):
+_BRISQUE = None
+
+
+def _brisque() -> BRISQUE:
+    """Load the BRISQUE model once; building it reads the model files from disk."""
+    global _BRISQUE
+    if _BRISQUE is None:
+        _BRISQUE = BRISQUE(url=False)
+    return _BRISQUE
+
+
+def check_resolution(context: ValidationContext, min_res: Tuple[int, int] = (413, 531), recommended_res: Tuple[int, int] = (827, 1063)):
     """Check if image has sufficient resolution.
 
     :param context: The validation context containing the image and results.
@@ -51,11 +62,10 @@ def check_distortions(context: ValidationContext,
     """
     if area == 'face':
         if not context.face_data or 'bbox' not in context.face_data:
-            # Can't perform face check without a face
-            return None
+            raise CheckSkipped('No face found.')
         bbox = context.face_data['bbox']
         x, y, w, h = bbox['x'], bbox['y'], bbox['width'], bbox['height']
-        target_image_bgr = context.image_np[y:y + h, x:x + w]
+        target_image_bgr = context.image_np[max(0, y):max(0, y + h), max(0, x):max(0, x + w)]
         measurement_key = 'brisque_score_face'
         area_name = 'Face region'
     elif area == 'full':
@@ -66,16 +76,11 @@ def check_distortions(context: ValidationContext,
         raise ValueError("Area must be either 'full' or 'face'.")
 
     if target_image_bgr.size == 0:
-        return None  # Skip if the target area is empty
+        raise CheckSkipped(f'{area_name} area is empty.')
 
-    try:
-        rgb_image = cv2.cvtColor(target_image_bgr, cv2.COLOR_BGR2RGB)
-        brisque_obj = BRISQUE(url=False)
-        brisque_score = brisque_obj.score(rgb_image)
-        context.measurements[measurement_key] = float(brisque_score)
-    except Exception as e:
-        warnings.warn(f"Failed to compute BRISQUE score for {area} area. Error: {e}")
-        return None
+    rgb_image = cv2.cvtColor(target_image_bgr, cv2.COLOR_BGR2RGB)
+    brisque_score = _brisque().score(rgb_image)
+    context.measurements[measurement_key] = float(brisque_score)
 
     if brisque_score > error_threshold:
         context.issues.append(ValidationIssue(
@@ -97,3 +102,65 @@ def check_distortions(context: ValidationContext,
             'analyzed_image': analyzed_image_for_debug
         }
     return None
+
+
+def check_face_sharpness(context: ValidationContext, warn_below: float, fail_below: float, face_width: int = 256):
+    """Check that the face is sharp: Laplacian energy relative to gradient energy, on the face scaled to a fixed width.
+
+    Dividing by the gradient energy makes the measure independent of exposure and contrast, and scaling the
+    face makes it independent of the photo's resolution. Sharp studio faces score about 0.15-0.24, a blur
+    of sigma 2 px at 1063 px height about 0.08-0.11.
+
+    :param warn_below: Ratio below which it warns.
+    :param fail_below: Ratio below which it fails.
+    """
+    bbox = context.face_data.get('bbox')
+    if not bbox:
+        raise CheckSkipped('No face found.')
+    face = context.image_np[max(0, bbox['y']):bbox['y'] + bbox['height'], max(0, bbox['x']):bbox['x'] + bbox['width']]
+    if face.size == 0:
+        raise CheckSkipped('Face region is outside the photo.')
+
+    gray = cv2.cvtColor(face, cv2.COLOR_BGR2GRAY)
+    height = max(1, int(round(face_width * gray.shape[0] / gray.shape[1])))
+    gray = cv2.resize(gray, (face_width, height), interpolation=cv2.INTER_AREA).astype(np.float32)
+    laplacian = np.abs(cv2.Laplacian(gray, cv2.CV_32F)).mean()
+    gradient = np.hypot(cv2.Sobel(gray, cv2.CV_32F, 1, 0), cv2.Sobel(gray, cv2.CV_32F, 0, 1)).mean()
+    if gradient < 1e-3:
+        raise CheckSkipped('The face region is flat.')
+
+    sharpness = float(laplacian / gradient)
+    context.measurements['face_sharpness'] = sharpness
+    if sharpness < fail_below:
+        context.issues.append(ValidationIssue(
+            category='error', message='Face is blurry. The photo must be sharp.', severity=8))
+    elif sharpness < warn_below:
+        context.issues.append(ValidationIssue(
+            category='warning', message='Face may be slightly blurry.', severity=5))
+
+
+def check_compression_blocks(context: ValidationContext, warn_above: float, fail_above: float):
+    """Check for JPEG block artefacts: brightness jumps at 8-pixel block edges compared with inside the blocks.
+
+    About 1.0-1.15 for a well-compressed photo, above 5 for JPEG quality 4. Misses artefacts once the
+    photo was resized after compression, since the block grid no longer lines up.
+
+    :param warn_above: Blockiness above which it warns.
+    :param fail_above: Blockiness above which it fails.
+    """
+    gray = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    ratios = []
+    for axis in (0, 1):
+        jumps = np.abs(np.diff(gray, axis=axis))
+        at_edge = (np.arange(jumps.shape[axis]) % 8) == 7
+        inside = jumps.take(np.nonzero(~at_edge)[0], axis=axis).mean()
+        ratios.append(jumps.take(np.nonzero(at_edge)[0], axis=axis).mean() / max(inside, 1e-3))
+
+    blockiness = float(np.mean(ratios))
+    context.measurements['jpeg_blockiness'] = blockiness
+    if blockiness > fail_above:
+        context.issues.append(ValidationIssue(
+            category='error', message='Strong compression artefacts (blocky image). Save with higher quality.', severity=8))
+    elif blockiness > warn_above:
+        context.issues.append(ValidationIssue(
+            category='warning', message='Visible compression artefacts.', severity=5))

@@ -1,183 +1,155 @@
 """Geometric validation checks for passport photos."""
+from typing import Tuple
+
+import cv2
 import numpy as np
-from typing import Optional, Tuple
-from ..models import ValidationIssue, ValidationContext
+
+from ..models import CheckSkipped, ValidationIssue, ValidationContext
+
+# MediaPipe face mesh indices
+NOSE_TIP = 1
+CHIN = 152
+FOREHEAD = 10  # top of the forehead, roughly the hairline
+
+# How far the crown sits above the forehead landmark, as a share of the forehead-to-chin distance.
+# Measured on a bald subject; used when the top of the head is not visible in the photo.
+_CROWN_ABOVE_FOREHEAD = 0.32
+# Hair above this share is ignored, since voluminous hair does not count towards head height.
+_MAX_HAIR_ABOVE_FOREHEAD = 0.45
 
 
-def check_face_position(context: ValidationContext):
-    """Check if face is centered and proper size.
-
-    :param context: The validation context containing the image and results.
-    """
-    bbox = context.face_data.get('bbox')
-    if not bbox:
-        return
-
-    # Center check
-    face_center_x = bbox['x'] + bbox['width'] / 2
-    face_center_y = bbox['y'] + bbox['height'] / 2
-    image_center_x = context.width / 2
-
-    # Horizontal centering
-    horizontal_offset = abs(face_center_x - image_center_x) / context.width
-    context.measurements['horizontal_offset'] = float(horizontal_offset)
-
-    if horizontal_offset > 0.1:
-        context.issues.append(ValidationIssue(
-            category='warning',
-            message='Face is not horizontally centered.',
-            severity=6
-        ))
-
-    # Face size check (should be 70-80% of image height per ICAO)
-    face_height_ratio = bbox['height'] / context.height
-    context.measurements['face_height_ratio'] = float(face_height_ratio)
-
-    if face_height_ratio < 0.60:
-        context.issues.append(ValidationIssue(
-            category='error',
-            message=f'Face is too small ({face_height_ratio * 100:.1f}% of image). Should be 70-80%.',
-            severity=9
-        ))
-    elif face_height_ratio > 0.85:
-        context.issues.append(ValidationIssue(
-            category='error',
-            message=f'Face is too large ({face_height_ratio * 100:.1f}% of image). Should be 70-80%.',
-            severity=9
-        ))
-    elif face_height_ratio < 0.70 or face_height_ratio > 0.80:
-        context.issues.append(ValidationIssue(
-            category='warning',
-            message=f'Face size ({face_height_ratio * 100:.1f}%) is outside optimal range (70-80%).',
-            severity=5
-        ))
-
-    # Vertical position
-    if face_center_y > context.height * 0.6:
-        context.issues.append(ValidationIssue(
-            category='warning',
-            message='Face is positioned too low in the frame.',
-            severity=5
-        ))
-
-
-def check_head_pose(context: ValidationContext):
-    """Check if head is straight using eye landmarks.
-
-    Detects roll (tilt) using eye positions - the most critical check for passport photos.
-
-    :param context: The validation context containing the image and results.
-    """
+def _landmarks(context: ValidationContext):
     landmarks = context.face_data.get('landmarks')
     if not landmarks:
-        return
+        raise CheckSkipped('No facial landmarks found.')
+    return landmarks.landmark
 
-    # Get eye corner landmarks (most reliable for roll detection)
-    left_eye_outer = landmarks.landmark[33]
-    right_eye_outer = landmarks.landmark[263]
 
-    # Calculate roll angle from eye positions
-    left_eye_y = left_eye_outer.y * context.height
-    right_eye_y = right_eye_outer.y * context.height
-    left_eye_x = left_eye_outer.x * context.width
-    right_eye_x = right_eye_outer.x * context.width
+def _bbox(context: ValidationContext):
+    bbox = context.face_data.get('bbox')
+    if not bbox:
+        raise CheckSkipped('No face found.')
+    return bbox
 
-    dy = right_eye_y - left_eye_y
-    dx = right_eye_x - left_eye_x
 
-    roll_rad = np.arctan2(dy, dx)
-    roll_deg = np.degrees(roll_rad)
+def _crown_y(context: ValidationContext, forehead_y: float, chin_y: float) -> Tuple[float, str]:
+    """Estimate the y coordinate of the top of the head and say how it was found ('mask' or 'estimated')."""
+    face_height = chin_y - forehead_y
+    estimated = forehead_y - _CROWN_ABOVE_FOREHEAD * face_height
 
-    context.measurements['head_roll_degrees'] = float(roll_deg)
+    mask = context.person_mask_binary
+    if mask is None:
+        return estimated, 'estimated'
 
-    pitch_deg, yaw_deg = _estimate_pitch_yaw(landmarks)
-    if pitch_deg is not None:
-        context.measurements['head_pitch_degrees'] = float(pitch_deg)
-    if yaw_deg is not None:
-        context.measurements['head_yaw_degrees'] = float(yaw_deg)
+    # Look for the first person pixel in a narrow column above the nose
+    nose_x = int(np.clip(_landmarks(context)[NOSE_TIP].x * context.width, 0, context.width - 1))
+    half_band = max(1, context.width // 50)
+    column = mask[:max(1, int(forehead_y)), max(0, nose_x - half_band):nose_x + half_band + 1].any(axis=1)
+    if not column.any():
+        return estimated, 'estimated'
 
-    # Check roll (head tilt left/right)
-    abs_roll = abs(roll_deg)
-    if abs_roll > 15:
+    top = int(np.argmax(column))
+    if top == 0:
+        # The head (or a mask leak) runs into the top edge, so the crown is not visible
+        return estimated, 'estimated'
+    return max(float(top), forehead_y - _MAX_HAIR_ABOVE_FOREHEAD * face_height), 'mask'
+
+
+def check_face_size(context: ValidationContext):
+    """Check that the head (chin to crown) covers 70-80% of the photo height.
+
+    The German rule is 32-36 mm of a 45 mm photo, i.e. 71-80%.
+
+    :param context: The validation context containing the image and results.
+    """
+    bbox = _bbox(context)
+    lm = _landmarks(context)
+
+    chin_y = lm[CHIN].y * context.height
+    forehead_y = lm[FOREHEAD].y * context.height
+    crown_y, crown_method = _crown_y(context, forehead_y, chin_y)
+
+    head_height_ratio = (chin_y - crown_y) / context.height
+    context.measurements['face_height_ratio'] = float(bbox['height'] / context.height)
+    context.measurements['head_height_ratio'] = float(head_height_ratio)
+    context.measurements['crown_method'] = crown_method
+    context.measurements['crown_y'] = float(crown_y)
+    context.measurements['chin_y'] = float(chin_y)
+
+    if head_height_ratio < 0.60:
         context.issues.append(ValidationIssue(
             category='error',
-            message=f'Head is tilted {abs_roll:.1f}° {"right" if roll_deg > 0 else "left"}. '
-            f'Keep head completely straight (max 5° allowed).',
-            severity=10
+            message=f'Head is too small ({head_height_ratio * 100:.1f}% of the photo height). Should be 70-80%.',
+            severity=9
         ))
-    elif abs_roll > 5:
+    elif head_height_ratio > 0.85:
+        context.issues.append(ValidationIssue(
+            category='error',
+            message=f'Head is too large ({head_height_ratio * 100:.1f}% of the photo height). Should be 70-80%.',
+            severity=9
+        ))
+    elif head_height_ratio < 0.70 or head_height_ratio > 0.80:
         context.issues.append(ValidationIssue(
             category='warning',
-            message=f'Head has slight tilt of {abs_roll:.1f}° {"right" if roll_deg > 0 else "left"}. '
-            f'Try to keep head perfectly straight.',
-            severity=7
+            message=f'Head height ({head_height_ratio * 100:.1f}%) is outside the optimal range (70-80%).',
+            severity=5
         ))
 
-    # Check pitch (head tilt up/down)
-    if pitch_deg is not None:
-        abs_pitch = abs(pitch_deg)
-        if abs_pitch > 15:
-            context.issues.append(ValidationIssue(
-                category='error',
-                message=f'Head is tilted {abs_pitch:.1f}° {"up" if pitch_deg < 0 else "down"}. '
-                f'Look straight ahead (max 10° allowed).',
-                severity=9
-            ))
-        elif abs_pitch > 10:
-            context.issues.append(ValidationIssue(
-                category='warning',
-                message=f'Head is slightly tilted {abs_pitch:.1f}° {"up" if pitch_deg < 0 else "down"}.',
-                severity=6
-            ))
 
-    # Check yaw (head rotation left/right)
-    if yaw_deg is not None:
-        abs_yaw = abs(yaw_deg)
-        if abs_yaw > 15:
-            context.issues.append(ValidationIssue(
-                category='error',
-                message=f'Head is rotated {abs_yaw:.1f}° {"right" if yaw_deg > 0 else "left"}. '
-                f'Face camera directly (max 10° allowed).',
-                severity=9
-            ))
-        elif abs_yaw > 10:
-            context.issues.append(ValidationIssue(
-                category='warning',
-                message=f'Head is slightly rotated {abs_yaw:.1f}° {"right" if yaw_deg > 0 else "left"}.',
-            ))
+def check_face_centered(context: ValidationContext, warn_offset: float = 0.05, fail_offset: float = 0.10,
+                        vertical_range: Tuple[float, float] = (0.45, 0.70)):
+    """Check that the face is horizontally centered and at a plausible height in the frame.
 
+    With the head at 70-80% of the photo height, the centre of the face box sits at about 55-65% of
+    the height (58-62% on the London Set crops).
 
-def _estimate_pitch_yaw(landmarks) -> Tuple[Optional[float], Optional[float]]:
-    """Estimate pitch and yaw using facial landmark proportions.
-
-    :param landmarks: The facial landmarks from MediaPipe.
-    :return: A tuple of (pitch, yaw) in degrees, or (None, None) if estimation fails.
+    :param warn_offset: Horizontal offset of the face centre (share of the photo width) above which it warns.
+    :param fail_offset: Offset above which it fails.
+    :param vertical_range: Allowed position of the face centre, as a share of the photo height from the top.
     """
-    try:
-        nose_tip = landmarks.landmark[1]
-        left_eye = landmarks.landmark[33]
-        right_eye = landmarks.landmark[263]
-        left_mouth = landmarks.landmark[61]
-        right_mouth = landmarks.landmark[291]
+    bbox = _bbox(context)
 
-        face_center_x = (left_eye.x + right_eye.x) / 2
-        face_center_y = (left_eye.y + right_eye.y) / 2
+    face_center_x = bbox['x'] + bbox['width'] / 2
+    face_center_y = bbox['y'] + bbox['height'] / 2
+    horizontal_offset = abs(face_center_x - context.width / 2) / context.width
+    vertical_position = face_center_y / context.height
+    context.measurements['horizontal_offset'] = float(horizontal_offset)
+    context.measurements['vertical_position'] = float(vertical_position)
 
-        nose_offset_x = nose_tip.x - face_center_x
-        eye_distance = abs(right_eye.x - left_eye.x)
-        yaw_deg = (nose_offset_x / eye_distance) * 45 if eye_distance > 0 else 0
+    if horizontal_offset > fail_offset:
+        context.issues.append(ValidationIssue(
+            category='error',
+            message=f'Face is off centre by {horizontal_offset * 100:.0f}% of the photo width.',
+            severity=7
+        ))
+    elif horizontal_offset > warn_offset:
+        context.issues.append(ValidationIssue(
+            category='warning',
+            message='Face is not quite horizontally centered.',
+            severity=5
+        ))
 
-        mouth_center_y = (left_mouth.y + right_mouth.y) / 2
-        nose_to_mouth_dist = abs(mouth_center_y - nose_tip.y)
-        eyes_to_nose_dist = abs(nose_tip.y - face_center_y)
+    low, high = vertical_range
+    if not low <= vertical_position <= high:
+        context.issues.append(ValidationIssue(
+            category='warning',
+            message=f'Face is positioned too {"low" if vertical_position > high else "high"} in the frame.',
+            severity=5
+        ))
 
-        if eyes_to_nose_dist > 0:
-            vertical_ratio = nose_to_mouth_dist / eyes_to_nose_dist
-            pitch_deg = (1.1 - vertical_ratio) * 50
-        else:
-            pitch_deg = 0
 
-        return pitch_deg, yaw_deg
-    except Exception:
-        return None, None
+def check_photo_format(context: ValidationContext, aspect: float = 35 / 45, tolerance: float = 0.02):
+    """Check that the photo has the 35x45 mm format (width to height 7:9).
 
+    :param aspect: Required width / height.
+    :param tolerance: Allowed relative deviation from it.
+    """
+    ratio = context.width / context.height
+    context.measurements['aspect_ratio'] = float(ratio)
+    deviation = abs(ratio / aspect - 1)
+    if deviation > tolerance:
+        context.issues.append(ValidationIssue(
+            category='error',
+            message=f'Photo is {context.width}x{context.height} px (ratio {ratio:.2f}); it must have the 35x45 mm format (ratio {aspect:.2f}).',
+            severity=7
+        ))

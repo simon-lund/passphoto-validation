@@ -1,7 +1,7 @@
 """Configuration for the Passport Photo Validator."""
 from pydantic import Field
 from pydantic_settings import BaseSettings
-from typing import Tuple
+from typing import Optional, Tuple
 
 
 class ValidatorConfig(BaseSettings):
@@ -30,20 +30,37 @@ class ValidatorConfig(BaseSettings):
         description="BRISQUE score above this is considered a distortion warning."
     )
     min_res_width: int = Field(
-        default=600,
-        description="The minimum allowed image width."
+        default=413,
+        description="The minimum allowed image width (35 mm at 300 dpi)."
     )
     min_res_height: int = Field(
-        default=600,
-        description="The minimum allowed image height."
+        default=531,
+        description="The minimum allowed image height (45 mm at 300 dpi)."
     )
     recommended_res_width: int = Field(
-        default=900,
-        description="The recommended minimum image width."
+        default=827,
+        description="The recommended minimum image width (35 mm at 600 dpi)."
     )
     recommended_res_height: int = Field(
-        default=900,
+        default=1063,
         description="The recommended minimum image height."
+    )
+
+    ofiq_config_dir: Optional[str] = Field(
+        default=None,
+        description="OFIQ's data folder (holds ofiq_config.jaxn and models/). Without it the OFIQ checks are skipped."
+    )
+    ofiq_config_file: str = Field(
+        default='ofiq_config.jaxn',
+        description="OFIQ config file name inside ofiq_config_dir (e.g. one that limits OFIQ's threads)."
+    )
+    siglip_enabled: bool = Field(
+        default=False,
+        description="Run the SigLIP second opinions on the eyes (needs the siglip extra and OFIQ; see core/siglip.py)."
+    )
+    siglip_threads: int = Field(
+        default=4,
+        description="PyTorch threads for SigLIP; with several validators in parallel, keep threads x workers at the core count."
     )
 
     class Config:

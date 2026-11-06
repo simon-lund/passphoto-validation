@@ -13,8 +13,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from edutap.image_api.core.utils import convert_to_bgr
-from edutap.image_api.core import PassportPhotoValidator
+from edutap.image_api.core.utils import prepare_image
+from edutap.image_api.core import PassportPhotoValidator, ValidatorConfig
 
 app = typer.Typer(
     name="passport-validator",
@@ -28,7 +28,7 @@ def load_image(image_path: Path) -> np.ndarray:
     """Load and convert image to BGR format for OpenCV."""
     try:
         image = Image.open(image_path)
-        return convert_to_bgr(image)
+        return prepare_image(image)
     except Exception as e:
         console.print(f"[red]Error loading image:[/red] {e}")
         raise typer.Exit(1)
@@ -76,7 +76,7 @@ def validate(
 
     # Validate
     with console.status("[bold cyan]Analyzing photo..."):
-        validator = PassportPhotoValidator(min_detection_confidence=confidence)
+        validator = PassportPhotoValidator(ValidatorConfig(min_detection_confidence=confidence))
         report = validator(image_np)
 
     # Display results
@@ -137,6 +137,13 @@ def _display_report(report, verbose: bool):
         console.print(table)
     else:
         console.print("\n[bold green]✓ No issues found![/bold green]")
+
+    # Rules that could not be judged keep a photo from being valid
+    skipped = [rule for rule in report.rules if rule.id in report.skipped_rules]
+    if skipped:
+        console.print(f"\n[bold yellow]{len(skipped)} rule(s) could not be checked:[/bold yellow]")
+        for rule in skipped:
+            console.print(f"  {rule.title}: {rule.reasons[0] if rule.reasons else 'no check ran'}")
 
     # Suggested crop
     if report.suggested_crop:
@@ -200,7 +207,7 @@ def batch(
     if output_dir:
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    validator = PassportPhotoValidator(min_detection_confidence=confidence)
+    validator = PassportPhotoValidator(ValidatorConfig(min_detection_confidence=confidence))
 
     # Process each image
     results = []
@@ -220,7 +227,8 @@ def batch(
             else:
                 console.print(f"  [red]✗ Invalid (score: {report.overall_score:.1f})[/red]")
                 console.print(f"    {len([i for i in report.issues if i.category == 'error'])} errors, "
-                              f"{len([i for i in report.issues if i.category == 'warning'])} warnings")
+                              f"{len([i for i in report.issues if i.category == 'warning'])} warnings, "
+                              f"{len(report.skipped_rules)} rules not checked")
 
             results.append({
                 'filename': image_path.name,

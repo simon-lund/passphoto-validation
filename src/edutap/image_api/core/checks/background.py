@@ -1,5 +1,5 @@
 """Background validation checks for passport photos."""
-import warnings
+from typing import Optional
 
 import cv2
 import mediapipe as mp
@@ -7,7 +7,7 @@ import numpy as np
 from skimage import feature
 from skimage.feature import local_binary_pattern
 
-from ..models import ValidationIssue, ValidationContext
+from ..models import CheckSkipped, ValidationIssue, ValidationContext
 
 mp_selfie_segmentation = mp.solutions.selfie_segmentation
 
@@ -148,36 +148,33 @@ def _calculate_color_coherence_cov(image, rectangles):
     if len(rectangles) < 2:
         return 0.0
 
-    # Calculate mean colors
-    rect_colors = []
+    # Calculate mean colors and rectangle centers
+    centers = []
+    colors = []
     for x, y, w, h, area in rectangles:
         region = image[y:y + h, x:x + w]
         lab_region = cv2.cvtColor(region, cv2.COLOR_BGR2LAB)
-        mean_color = np.mean(lab_region, axis=(0, 1))
-        rect_colors.append((x, y, w, h, mean_color))
+        colors.append(np.mean(lab_region, axis=(0, 1)))
+        centers.append((x + w // 2, y + h // 2, max(w, h)))
+    centers = np.array(centers, dtype=np.float64)
+    colors = np.array(colors, dtype=np.float64)
 
-    # Calculate color differences between neighbors
+    # Calculate color differences between neighbors (each pair once, vectorized per rectangle)
     color_diffs = []
 
-    for i, (x1, y1, w1, h1, color1) in enumerate(rect_colors):
-        cx1, cy1 = x1 + w1 // 2, y1 + h1 // 2
+    for i in range(len(centers) - 1):
+        others = centers[i + 1:]
+        distance = np.hypot(others[:, 0] - centers[i, 0], others[:, 1] - centers[i, 1])
 
-        for j, (x2, y2, w2, h2, color2) in enumerate(rect_colors):
-            if i >= j:
-                continue
+        # Only neighbors
+        max_neighbor_distance = np.maximum(others[:, 2], centers[i, 2]) * 2
+        neighbors = distance < max_neighbor_distance
 
-            cx2, cy2 = x2 + w2 // 2, y2 + h2 // 2
-            distance = np.sqrt((cx2 - cx1) ** 2 + (cy2 - cy1) ** 2)
+        # Color difference in L*a*b*, normalized by spatial distance
+        color_diff = np.sqrt(np.sum((colors[i + 1:][neighbors] - colors[i]) ** 2, axis=1))
+        color_diffs.append(color_diff / (distance[neighbors] + 1))
 
-            # Only neighbors
-            max_neighbor_distance = max(w1, h1, w2, h2) * 2
-            if distance < max_neighbor_distance:
-                # Color difference in L*a*b*
-                color_diff = np.sqrt(np.sum((color2 - color1) ** 2))
-
-                # Normalize by spatial distance
-                normalized_diff = color_diff / (distance + 1)
-                color_diffs.append(normalized_diff)
+    color_diffs = np.concatenate(color_diffs) if color_diffs else np.array([])
 
     if len(color_diffs) > 1:
         # Coefficient of Variation
@@ -222,28 +219,35 @@ def _calculate_edge_density_rect(gray_image, rectangles):
     return 0.0
 
 
-def check_background_brightness(context: ValidationContext, min_brightness: float = 80.0, debug: bool = False):
+def check_background_brightness(context: ValidationContext, min_brightness: float = 80.0,
+                                fail_below: Optional[float] = None, debug: bool = False):
     """
     Check if the background is sufficiently bright.
 
     :param context: The validation context with segmentation data.
-    :param min_brightness: Minimum acceptable brightness (0-255).
+    :param min_brightness: Brightness (0-255) below which the check warns.
+    :param fail_below: Brightness below which the check fails; None never fails.
     :param debug: If True, returns visualization data.
     """
     if context.segmentation_mask is None:
-        warnings.warn("No segmentation mask present. Skipping brightness check.")
-        return None
+        raise CheckSkipped("No segmentation mask present.")
 
     background_mask_binary = (context.segmentation_mask < 0.5).astype(np.uint8)
 
     if np.sum(background_mask_binary) == 0:
-        return None
+        raise CheckSkipped("No background visible.")
 
     gray_full = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2GRAY)
     mean_brightness = np.mean(gray_full[background_mask_binary == 1])
     context.measurements['background_brightness'] = float(mean_brightness)
 
-    if mean_brightness < min_brightness:
+    if fail_below is not None and mean_brightness < fail_below:
+        context.issues.append(ValidationIssue(
+            category='error',
+            message=f'Background is dark (brightness: {mean_brightness:.2f}). It must be light, ideally grey.',
+            severity=7
+        ))
+    elif mean_brightness < min_brightness:
         context.issues.append(ValidationIssue(
             category='warning',
             message=f'Background is quite dark (brightness: {mean_brightness:.2f}). Consider using a lighter background.',
@@ -264,15 +268,13 @@ def check_background_texture(context: ValidationContext, lbp_threshold: float = 
     :param debug: If True, returns visualization data.
     """
     if context.segmentation_mask is None:
-        warnings.warn("No segmentation mask present. Skipping texture check.")
-        return None
+        raise CheckSkipped("No segmentation mask present.")
 
     background_mask_binary = (context.segmentation_mask < 0.5).astype(np.uint8)
     rectangles = _find_background_rectangles(background_mask_binary)
 
     if len(rectangles) < 3:
-        warnings.warn(f"Not enough clean background regions ({len(rectangles)}) for texture analysis.")
-        return None
+        raise CheckSkipped(f"Not enough clean background regions ({len(rectangles)}) for texture analysis.")
 
     gray_full = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2GRAY)
     avg_lbp_variance = _calculate_lbp_variance(gray_full, rectangles)
@@ -312,15 +314,13 @@ def check_background_uniformity(context: ValidationContext, variance_threshold: 
     :param debug: If True, returns visualization data.
     """
     if context.segmentation_mask is None:
-        warnings.warn("No segmentation mask present. Skipping uniformity check.")
-        return None
+        raise CheckSkipped("No segmentation mask present.")
 
     background_mask_binary = (context.segmentation_mask < 0.5).astype(np.uint8)
     rectangles = _find_background_rectangles(background_mask_binary)
 
     if len(rectangles) < 3:
-        warnings.warn(f"Not enough clean background regions ({len(rectangles)}) for uniformity analysis.")
-        return None
+        raise CheckSkipped(f"Not enough clean background regions ({len(rectangles)}) for uniformity analysis.")
 
     overall_range, within_rect_variance = _calculate_color_range(context.image_np, rectangles)
     context.measurements['background_color_range'] = float(overall_range)
@@ -342,6 +342,57 @@ def check_background_uniformity(context: ValidationContext, variance_threshold: 
     return None
 
 
+def check_background_pattern(context: ValidationContext, warn_above: float, fail_above: float,
+                             min_rectangles: int = 6, blur_sigma: float = 2.0, debug: bool = False):
+    """
+    Check for a pattern spread across the background (wallpaper, a flag, a printed backdrop).
+
+    Measures the colour variance (sum over L*a*b*) within each clean background rectangle and takes the
+    median. A pattern covers most rectangles; hair that strays into the background, or a single object,
+    covers only some, so the median ignores them. A light blur first removes film grain and JPEG noise,
+    which would otherwise read as texture on a plain wall.
+
+    :param context: The validation context with segmentation data.
+    :param warn_above: Median variance above this warns.
+    :param fail_above: Median variance above this fails.
+    :param min_rectangles: Fewer clean rectangles than this skip the check: the median of a handful of
+                           rectangles, all close to the person, is mostly hair and shoulders.
+    :param blur_sigma: Gaussian blur (pixels) applied before measuring.
+    :param debug: If True, returns visualization data.
+    """
+    if context.segmentation_mask is None:
+        raise CheckSkipped("No segmentation mask present.")
+
+    background_mask_binary = (context.segmentation_mask < 0.5).astype(np.uint8)
+    rectangles = _find_background_rectangles(background_mask_binary)
+
+    if len(rectangles) < min_rectangles:
+        raise CheckSkipped(f"Not enough clean background regions ({len(rectangles)}) for pattern analysis.")
+
+    lab = cv2.cvtColor(cv2.GaussianBlur(context.image_np, (0, 0), blur_sigma), cv2.COLOR_BGR2LAB).astype(np.float32)
+    variances = [lab[y:y + h, x:x + w].reshape(-1, 3).var(axis=0).sum() for x, y, w, h, _ in rectangles]
+    median_variance = float(np.median(variances))
+    context.measurements['background_median_rect_variance'] = median_variance
+    context.measurements['background_rect_count'] = len(rectangles)
+
+    if median_variance > fail_above:
+        context.issues.append(ValidationIssue(
+            category='error',
+            message=f'Background is patterned (median local variance: {median_variance:.1f}). Background must be plain.',
+            severity=7
+        ))
+    elif median_variance > warn_above:
+        context.issues.append(ValidationIssue(
+            category='warning',
+            message=f'Background may be patterned (median local variance: {median_variance:.1f}).',
+            severity=4
+        ))
+
+    if debug:
+        return {'median_rect_variance': median_variance, 'rect_variances': variances, 'rectangles': rectangles}
+    return None
+
+
 def check_background_consistency(context: ValidationContext, cov_threshold: float = 0.5, debug: bool = False):
     """
     Check for consistent color transitions using Coefficient of Variation.
@@ -352,15 +403,13 @@ def check_background_consistency(context: ValidationContext, cov_threshold: floa
     :param debug: If True, returns visualization data.
     """
     if context.segmentation_mask is None:
-        warnings.warn("No segmentation mask present. Skipping consistency check.")
-        return None
+        raise CheckSkipped("No segmentation mask present.")
 
     background_mask_binary = (context.segmentation_mask < 0.5).astype(np.uint8)
     rectangles = _find_background_rectangles(background_mask_binary)
 
     if len(rectangles) < 3:
-        warnings.warn(f"Not enough clean background regions ({len(rectangles)}) for consistency analysis.")
-        return None
+        raise CheckSkipped(f"Not enough clean background regions ({len(rectangles)}) for consistency analysis.")
 
     color_coherence_cov = _calculate_color_coherence_cov(context.image_np, rectangles)
     context.measurements['background_color_coherence_cov'] = float(color_coherence_cov)
@@ -387,8 +436,7 @@ def check_background_clutter(context: ValidationContext, edge_density_threshold:
     :param debug: If True, returns visualization data.
     """
     if context.segmentation_mask is None:
-        warnings.warn("No segmentation mask present. Skipping clutter check.")
-        return None
+        raise CheckSkipped("No segmentation mask present.")
 
     background_mask_binary = (context.segmentation_mask < 0.5).astype(np.uint8)
 
@@ -398,15 +446,13 @@ def check_background_clutter(context: ValidationContext, edge_density_threshold:
             face_area = face_bbox['width'] * face_bbox['height']
             image_area = context.width * context.height
             if face_area / image_area > 0.85:
-                warnings.warn("No background pixels found, likely because the face covers the entire image. Skipping clutter check.")
-                return None
-        raise ValueError("Could not identify any background pixels for analysis. This indicates a segmentation failure.")
+                raise CheckSkipped("No background pixels found, likely because the face covers the entire image.")
+        raise CheckSkipped("Could not identify any background pixels for analysis. This indicates a segmentation failure.")
 
     rectangles = _find_background_rectangles(background_mask_binary)
 
     if len(rectangles) < 3:
-        warnings.warn(f"Not enough clean background regions ({len(rectangles)}) for clutter analysis.")
-        return None
+        raise CheckSkipped(f"Not enough clean background regions ({len(rectangles)}) for clutter analysis.")
 
     gray_full = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2GRAY)
     edge_density = _calculate_edge_density_rect(gray_full, rectangles)

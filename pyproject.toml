@@ -36,6 +36,8 @@ dependencies = [
     "typer[all]>=0.9.0",
     "rich>=13.0.0",
     "brisque>=0.0.17",
+    "pydantic-settings>=2.15.0",
+    "scikit-image>=0.25.2",
 ]
 
 [project.urls]
@@ -46,25 +48,47 @@ Documentation = "https://docs.edutap.eu/packages/edutap_image_api/index.html"
 [project.optional-dependencies]
 test = [
     "pytest",
+    "httpx",
     "requests-mock",
     "jupyter",
     "matplotlib",
     "mypy",
     "types-requests",
     "pytest-stub",
+    "pandas>=2.3.3",
 ]
 develop = [
     "pdbpp",
     "ipython",
 ]
+# SigLIP second opinions on the eyes (core/siglip.py); the tokenizer needs transformers and sentencepiece
+siglip = [
+    "torch>=2.4",
+    "torchvision",  # listed so it comes from the same CPU index as torch
+    "open_clip_torch>=3.3,<4",  # the thresholds were calibrated with 3.3
+    "transformers",
+    "sentencepiece",
+    "protobuf",
+]
 
 [project.scripts]
 image_api = "edutap.image_api.main:main"
 passport-validator = "edutap.image_api.cli:app"
+passport-validator-api = "edutap.image_api.check_api:main"
 
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
+
+# CPU-only PyTorch: the default Linux wheels pull in several GB of CUDA libraries
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.setuptools.packages.find]
 where = ["src"]

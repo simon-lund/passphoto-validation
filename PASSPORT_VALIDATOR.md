@@ -1,5 +1,59 @@
 # Passport Photo Validator - Modular Architecture
 
+## Quick start
+
+```bash
+uv sync --extra test
+```
+
+Most face checks come from **OFIQ**, the BSI's open-source implementation of ISO/IEC 29794-5 (face image quality), co-maintained by eu-LISA. It isn't on PyPI, so build it once next to this repo (needs cmake and about 15 minutes; its models, 430 MB, download from eu-LISA during the build):
+
+```bash
+git clone https://github.com/BSI-OFIQ/OFIQ-Project.git ../OFIQ-Project
+```
+
+```bash
+cd ../OFIQ-Project && python3 -m venv .conan-venv && .conan-venv/bin/pip install conan==2.18.1
+```
+
+```bash
+cd ../OFIQ-Project/scripts && CMAKE_POLICY_VERSION_MINIMUM=3.5 PATH=../.conan-venv/bin:$PATH bash build.sh --build-python
+```
+
+```bash
+uv pip install ../OFIQ-Project/install_x86_64_linux/Release/ofiq-1.2.0-py3-none-any.whl
+```
+
+Then set `OFIQ_CONFIG_DIR=../OFIQ-Project/data` (absolute path) wherever the validator runs. Without it the OFIQ checks report `skipped` with the reason, the rules they cover end as `skipped`, and no photo is valid. `CMAKE_POLICY_VERSION_MINIMUM` is only needed with cmake 4. OFIQ's conan profile installs missing system packages with sudo; set `tools.system.package_manager:mode=check` in `conan/conan_profile_release_linux.txt` to get a list instead.
+
+Optionally, **SigLIP** SO400M (Google, Apache 2.0) adds two warn-only second opinions on the eyes: reflections on glasses and gaze. It needs PyTorch (CPU) and a 3.3 GB model, which downloads from Hugging Face on first use (to `HF_HOME`, by default `~/.cache/huggingface`). `--inexact` keeps the hand-installed OFIQ wheel:
+
+```bash
+uv sync --extra test --extra siglip --inexact
+```
+
+Then set `SIGLIP_ENABLED=true` (and `SIGLIP_THREADS` when several validators run in parallel). It looks at the eyes OFIQ found, so it needs OFIQ too; without either, its checks report `skipped` with the reason. Loading takes about 25 s and 3.5 GB of memory; each photo takes about a second longer.
+
+See the whole pipeline at work on the sample photos (per rule and per check, plus altered copies as sanity checks):
+
+```bash
+uv run --extra test jupyter lab notebooks/pipeline_overview.ipynb
+```
+
+`notebooks/evaluation.ipynb` shows how every check and rule does on about 2,200 labelled photos, and why the thresholds are where they are. `notebooks/visualize_checks2.ipynb` shows the internals of the background checks. Other entry points:
+
+```bash
+uv run passport-validator validate tests/test-images/9.jpg -v
+```
+
+```bash
+uv run passport-validator-api
+```
+
+```bash
+uv run --extra test pytest
+```
+
 ## Overview
 
 The passport photo validator has been refactored into a modular architecture with clear separation of concerns:
@@ -10,7 +64,7 @@ src/edutap/image_api/
 │   ├── __init__.py
 │   └── validator.py         # Validation engine
 ├── cli.py                   # CLI interface (Typer)
-├── main2.py                 # API interface (FastAPI)
+├── check_api.py             # API interface (FastAPI)
 └── ...
 ```
 
@@ -25,8 +79,8 @@ Pure business logic with zero dependencies on CLI or API frameworks.
 - `PassportPhotoReport` - Comprehensive validation report
 
 **Features:**
-- ICAO/ISO 19794-5 standards compliance
-- 13 validation checks (face detection, background, lighting, shadows, sharpness, etc.)
+- German ID photo rules (Fotomustertafel), measured largely with ISO/IEC 29794-5 (OFIQ)
+- 33 checks, each reported with status, reasons and measurements
 - Detailed measurements and scoring
 - Suggested crop regions for fixes
 
@@ -84,32 +138,31 @@ passport-validator batch ./photos/ -p "*.png" -o ./reports/
 passport-validator version
 ```
 
-### 3. **API Interface** (`main2.py`)
-FastAPI endpoint that uses the core validation logic.
+### 3. **API Interface** (`check_api.py`)
+FastAPI service that uses the core validation logic. No auth: it is a prototype.
 
-**Endpoint:**
+**Endpoints:**
 ```
-POST /validate-passport-photo
+POST /v1/check     multipart, photo in `file`: every check and every rule with status and reasons
+GET  /v1/rules     the rule catalogue
+GET  /health
 ```
+
+Errors are `{"code": "...", "detail": "..."}`; branch on `code`.
 
 **Usage:**
 ```bash
-# Start the API server
-uvicorn edutap.image_api.main2:app --reload --host 0.0.0.0 --port 8000
+# Start the API server (http://127.0.0.1:9600, docs at /docs)
+uv run passport-validator-api
 
 # Test with curl
-curl -X POST "http://localhost:8000/validate-passport-photo" \
-  -F "file=@photo.jpg"
+curl -F "file=@photo.jpg" http://127.0.0.1:9600/v1/check
 ```
 
 ## Installation
 
 ```bash
-# With uv (recommended)
-uv pip install -e ".[dev,test,typecheck]"
-
-# With pip
-pip install -e ".[dev,test,typecheck]"
+uv sync --extra test
 ```
 
 ## Usage Examples
@@ -149,27 +202,25 @@ passport-validator batch ./photos/ -o ./reports/
 
 **3. Programmatic usage (Python):**
 ```python
-import cv2
-from edutap.image_api.core import PassportPhotoValidator
+from PIL import Image
+from edutap.image_api.core import PassportPhotoValidator, ValidatorConfig
+from edutap.image_api.core.utils import prepare_image
 
-# Load image
-image = cv2.imread("photo.jpg")
+# Load image (applies EXIF rotation, returns BGR for OpenCV)
+image = prepare_image(Image.open("photo.jpg"))
 
 # Validate
-validator = PassportPhotoValidator(image, min_detection_confidence=0.5)
-report = validator.validate()
+validator = PassportPhotoValidator(ValidatorConfig(min_detection_confidence=0.5))
+report = validator(image)
 
-# Check results
-if report.is_valid:
-    print(f"✓ Valid! Score: {report.overall_score}/100")
-else:
-    print(f"✗ Invalid. Found {len(report.issues)} issues:")
-    for issue in report.issues:
-        print(f"  - [{issue.category}] {issue.message}")
+# Every rule and every check, including passes
+for rule in report.rules:
+    print(f"{rule.status:12} {rule.title}  {'; '.join(rule.reasons)}")
+for check in report.checks:
+    print(f"{check.status:8} {check.name}  {check.measurements}")
 
 # Get measurements
-print(f"Face size: {report.measurements['face_height_ratio']:.1%}")
-print(f"Sharpness: {report.measurements['sharpness']:.1f}")
+print(f"Head height: {report.measurements['head_height_ratio']:.1%}")
 
 # Export to JSON
 report_dict = report.to_dict()
@@ -179,14 +230,14 @@ report_dict = report.to_dict()
 
 **1. Start server:**
 ```bash
-uvicorn edutap.image_api.main2:app --reload --host 0.0.0.0 --port 8000
+uv run passport-validator-api
 ```
 
 **2. Call endpoint:**
 ```python
 import requests
 
-url = "http://localhost:8000/validate-passport-photo"
+url = "http://127.0.0.1:9600/v1/check"
 files = {"file": open("photo.jpg", "rb")}
 response = requests.post(url, files=files)
 report = response.json()
@@ -197,21 +248,63 @@ print(f"Score: {report['overall_score']}")
 
 ## Validation Checks
 
-The validator performs 13 comprehensive checks:
+The validator runs 33 checks (`PassportPhotoValidator.check_names()`). Each ends as `pass`, `warn`, `fail`, `skipped` (it couldn't judge the photo, e.g. no face, or OFIQ isn't installed) or `error` (it crashed, which is a bug).
 
-1. ✓ **Face Detection** - Ensures exactly one face is present
-2. ✓ **Face Position** - Checks centering and vertical placement
-3. ✓ **Face Size** - Validates 70-80% of image height (ICAO standard)
-4. ✓ **Background** - Uniform, light-colored background
-5. ✓ **Lighting** - Overall brightness and contrast
-6. ✓ **Shadows** - Detects harsh shadows on face
-7. ✓ **Sharpness** - Ensures image is not blurry
-8. ✓ **Resolution** - Minimum 600x600 pixels
-9. ✓ **Eyes Visibility** - Both eyes clearly visible
-10. ✓ **Head Pose** - Looking straight at camera
-11. ✓ **Expression** - Neutral expression, mouth closed
-12. ✓ **Hair Obscuring** - Face fully visible
-13. ✓ **Glasses Glare** - No reflections on glasses
+The German ID photo rules (Fotomustertafel) are listed in `core/rules.py`: 36 rules, each mapped to the checks that cover it. A rule takes the worst status of its checks that ran; a rule no check covers is `not_checked`, never a pass. A rule none of whose checks could run (OFIQ missing, no face landmarks) is `skipped`.
+
+A photo is valid (`is_valid`) only when no check reports an error **and** no rule is `skipped`: a photo the pipeline couldn't judge is never valid. `skipped_rules` lists those rules; each one's `reasons` say why. The 4 `not_checked` rules don't count against a photo, since no photo could pass them. Without OFIQ, every OFIQ rule is skipped, so no photo is valid.
+
+25 rules are fully covered, 7 partly, and 4 not yet: background shadows, colour gradients, print errors such as ink stains, and retouching.
+
+| Source | Checks |
+| --- | --- |
+| OFIQ (ISO/IEC 29794-5) | `ofiq_head_yaw`, `ofiq_head_pitch`, `ofiq_head_roll` (3DDFA-V2), `ofiq_expression` (two EfficientNets and AdaBoost), `ofiq_mouth_closed`, `ofiq_eyes_open` (98 landmarks), `ofiq_eyes_visible`, `ofiq_face_occlusion`, `ofiq_mouth_occlusion` (occlusion segmentation), `ofiq_head_covering` (face parsing), `ofiq_background`, `ofiq_illumination`, `ofiq_overexposure`, `ofiq_natural_colour` |
+| Our own, on OFIQ's face parsing | `glasses_tint`, `glasses_glare` |
+| SigLIP SO400M zero-shot on OFIQ's eye region (optional, warn only) | `siglip_glasses_glare`, `siglip_gaze` |
+| Our own | `face_detected`, `resolution`, `photo_format` (35x45), `face_size` (head 70-80% of the height), `face_centered`, `face_sharpness`, `compression` (JPEG blocks), `exposure`, `contrast`, `background_brightness`, `background_uniformity`, `background_consistency`, `background_pattern`, `glare`, `gaze`, `red_eyes` |
+
+Some OFIQ measures aren't used because they failed on the evaluation set:
+- `UnderExposurePrevention` rates well-lit dark skin as underexposed. On the London Set it scored below 100 only for Black subjects, down to 18. The `exposure` check judges the brightest parts of the photo instead.
+- `Sharpness` drops from 84 to 38 when a photo is shrunk by 3%.
+- `CompressionArtifacts` doesn't see JPEG quality 4 at ID-photo resolution.
+- `DynamicRange` doesn't separate low-contrast photos from good ones.
+
+The checks they replaced (BRISQUE, the solvePnP head pose, face-brightness exposure, face shadows by variance, eye and mouth ratios from the face mesh) were removed for the same reason. The old pipeline's results are in the notebook for comparison.
+
+**How well it works** (London Set, 102 people; see `notebooks/evaluation.ipynb`):
+- **Defects caught as fail:** 94-100% for most. The exceptions:
+  - smiles: 67% fail, 13% warn;
+  - colour casts: 83%;
+  - low contrast: warns only.
+- **Photos that should pass:** 96% fail no rule (the old pipeline: 11%), and 83% get no warning either. The rest are borderline head poses and a few backgrounds.
+
+The set comes from one studio, and most defects are synthetic, so treat these numbers as an upper bound.
+
+**Real photos with glasses, hats and closed eyes** (240 Open Images photos from Flickr, CC BY 2.0, labelled by Claude subagents; built with `scripts/build_openimages_set.py`, scored with `scripts/score_labels.py`). They are candid photos, not ID photos, so pose and gaze vary far more than in a photo booth. Caught means a warning or a fail:
+
+| Problem | Checks | Caught | False alarms |
+| --- | --- | --- | --- |
+| Hat or cap | `ofiq_head_covering` | 90% | 8% |
+| Sunglasses or tinted glasses | `glasses_tint`, `ofiq_eyes_visible` | 92% | 19% of clear glasses, 1% without glasses |
+| Reflections on glasses | `glasses_glare` | 10% | 5% |
+| Closed eyes | `ofiq_eyes_open` | 56% (40% fail) | 10% (1% fail) |
+| Eyes looking away | `gaze` | 59% | 18% |
+| Open mouth | `ofiq_mouth_closed` | 84% (67% fail) | 2% (1% fail) |
+| Dark background | `background_brightness` | 97% (all fail) | 2% of light backgrounds (none fail) |
+| Patterned background (rule) | `ofiq_background`, `background_consistency`, `background_pattern` | 80% (68% fail) | 34% of plain backgrounds (25% fail) |
+
+The eye thresholds come from this set: `ofiq_eyes_visible` at 90/50 flagged 61% of clear glasses, and `ofiq_eyes_open` at 80/50 failed only 8% of closed eyes. A glasses frame across the eyes now warns in only 15% of cases (13 photos, most borderline). Reflections on glasses are the weak spot: the check only sees blown-out white spots. Red eyes had too few real cases to measure (2).
+
+The background rows use a second set of labels (`vlm_background_labels.jsonl`: plain, patterned or objects, and light, medium or dark). `background_pattern` takes the median colour variance of the background's patches, so a faint pattern spread across it (a flag's emblem) fails, while hair straying into a few patches does not; it skips when fewer than 6 clean patches are visible (a third of these tight crops). Blurred objects behind the person are the weak spot: 39% of them pass `background_no_objects`, against 21% of sharp ones.
+
+**With SigLIP enabled** (warn only, thresholds set on the `calibrate` half; `notebooks/real_photos.ipynb`, section 4):
+
+| Rule, on Open Images | Without SigLIP | With SigLIP |
+| --- | --- | --- |
+| No reflections on glasses (clear glasses, 19 with reflections) | 16% caught, 6% false warnings | 37% caught, 15% false warnings |
+| Eyes look into the camera (66 looking away) | 56% caught, 17% false warnings | 80% caught, 28% false warnings |
+
+Most false warnings here fall on photos that fail other rules anyway. On the London Set, neither SigLIP check warned on any of the 306 photos that should pass, so the numbers above are unchanged. Of four zero-shot models tried (`scripts/clip_zero_shot.py`), SigLIP SO400M was the only one never worse than our checks; it misses the drawn-in reflections of the London Set, which the pixel check catches.
 
 ## Report Structure
 
@@ -246,6 +339,9 @@ The validator performs 13 comprehensive checks:
     "height": 536,
     "reason": "Face is too small - crop to this region"
   },
+  "checks": ["… one entry per check: name, status, reasons, measurements"],
+  "rules": ["… one entry per rule: id, title, status, checks, coverage, reasons"],
+  "skipped_rules": ["no_hat"],
   "summary": {
     "total_issues": 8,
     "errors": 5,
@@ -293,11 +389,11 @@ pre-commit run --all-files
 
 ## Dependencies
 
-- **Core:** `opencv-python`, `mediapipe`, `numpy`, `pillow`
+- **Core:** `opencv-python`, `mediapipe`, `numpy`, `pillow`; OFIQ (optional, built from source, see Quick start)
 - **CLI:** `typer[all]`, `rich`
 - **API:** `fastapi`, `uvicorn`, `python-multipart`
 
 ## Standards
 
-Validates against **ICAO/ISO 19794-5** international passport photo standards.
+Validates against the German ID photo rules (Fotomustertafel), using ISO/IEC 29794-5 (face image quality, via OFIQ) for most measurements.
 

@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+from PIL import ImageOps
 from PIL.Image import Image
 
 
@@ -24,3 +25,16 @@ def convert_to_bgr(image: Image) -> np.ndarray:
         return cv2.cvtColor(image_np, cv2.COLOR_RGBA2BGR)
     else:
         raise ValueError("Unsupported image format")
+
+
+def prepare_image(image: Image) -> np.ndarray:
+    """
+    Turn a freshly opened photo into the BGR array the validator expects.
+
+    Applies the EXIF rotation (phone photos store it there, so the face may otherwise lie on its side)
+    and converts palette, CMYK and other modes to RGB first.
+    """
+    image = ImageOps.exif_transpose(image)
+    if image.mode not in ('L', 'RGB', 'RGBA'):
+        image = image.convert('RGB')
+    return convert_to_bgr(image)
