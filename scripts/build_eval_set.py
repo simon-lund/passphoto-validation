@@ -50,6 +50,10 @@ SYNTHETIC_VARIANTS = {
     'bg_object': 'background_no_objects',
     'colour_cast': 'natural_colour',
     'side_shadow': 'no_face_shadows',
+    'bg_shadow': 'background_no_shadows',
+    'bg_gradient': 'no_color_gradients',
+    'ink_stain': 'no_print_errors',
+    'smoothed': 'no_retouching',
 }
 
 _CHIN, _FOREHEAD, _NOSE = 152, 10, 1
@@ -191,6 +195,55 @@ def side_shadow(image: np.ndarray, geometry: Geometry) -> np.ndarray:
     return np.clip(image * shade[..., None], 0, 255).astype(np.uint8)
 
 
+def bg_shadow(image: np.ndarray, geometry: Geometry) -> np.ndarray:
+    """A soft shadow on the background to the right of the person, as a flash from the left throws."""
+    h, w = image.shape[:2]
+    dx, dy = int(w * 0.06), int(h * 0.02)
+    shifted = np.zeros_like(geometry.person)
+    shifted[dy:, dx:] = geometry.person[:h - dy, :w - dx]
+    shade = cv2.GaussianBlur((shifted & ~geometry.person).astype(np.float32), (0, 0), w * 0.01)
+    return np.clip(image * (1 - 0.4 * shade)[..., None], 0, 255).astype(np.uint8)
+
+
+def bg_gradient(image: np.ndarray, geometry: Geometry) -> np.ndarray:
+    """The background darkens from left to right, as a gradient backdrop or a lamp on one side gives."""
+    w = image.shape[1]
+    factor = np.where(geometry.person, 1.0, np.linspace(1.0, 0.5, w, dtype=np.float32)[None, :])
+    return np.clip(image * factor[..., None], 0, 255).astype(np.uint8)
+
+
+def ink_stain(image: np.ndarray, geometry: Geometry) -> np.ndarray:
+    """Three dark spots of about 1 mm and a scratch on the background, as a leaking pen or a dirty scanner leaves."""
+    h, w = image.shape[:2]
+    out = image.copy()
+    for fx, fy, radius in ((0.1, 0.1, 0.02), (0.9, 0.12, 0.015), (0.07, 0.5, 0.012)):
+        cv2.ellipse(out, (int(w * fx), int(h * fy)), (int(w * radius), int(w * radius * 0.7)), 20, 0, 360, (30, 40, 60), -1)
+    cv2.line(out, (int(w * 0.75), int(h * 0.03)), (int(w * 0.92), int(h * 0.2)), (40, 40, 40), max(1, w // 300))
+    out = cv2.GaussianBlur(out, (0, 0), 0.8)
+    return np.where(geometry.person[..., None], image, out)
+
+
+def _hull(shape, points: np.ndarray, connections, grow: int) -> np.ndarray:
+    indices = sorted({index for edge in connections for index in edge})
+    mask = np.zeros(shape[:2], np.uint8)
+    cv2.fillConvexPoly(mask, cv2.convexHull(points[indices].astype(np.int32)), 1)
+    return cv2.dilate(mask, np.ones((grow, grow), np.uint8)) if grow else mask
+
+
+def smoothed(image: np.ndarray, geometry: Geometry) -> np.ndarray:
+    """Skin flattened by an edge-preserving filter, as beauty filters do; eyes, brows and mouth stay as they are."""
+    w = image.shape[1]
+    face_mesh = mp.solutions.face_mesh
+    grow = max(1, int(w * 0.02))
+    skin = _hull(image.shape, geometry.points, face_mesh.FACEMESH_FACE_OVAL, 0)
+    for feature in (face_mesh.FACEMESH_LEFT_EYE, face_mesh.FACEMESH_RIGHT_EYE, face_mesh.FACEMESH_LEFT_EYEBROW,
+                    face_mesh.FACEMESH_RIGHT_EYEBROW, face_mesh.FACEMESH_LIPS):
+        skin &= 1 - _hull(image.shape, geometry.points, feature, grow)
+    alpha = cv2.GaussianBlur(skin.astype(np.float32), (0, 0), w * 0.01)[..., None]
+    smooth = cv2.edgePreservingFilter(image, flags=cv2.RECURS_FILTER, sigma_s=40, sigma_r=0.25)
+    return (image * (1 - alpha) + smooth * alpha).astype(np.uint8)
+
+
 def synthetic(variant: str, base: np.ndarray, geometry: Geometry, source: np.ndarray, source_geometry: Geometry):
     if variant == 'roll_4':
         return rotate(base, geometry.eye_centre(), 4)
@@ -229,6 +282,14 @@ def synthetic(variant: str, base: np.ndarray, geometry: Geometry, source: np.nda
         return colour_cast(base)
     if variant == 'side_shadow':
         return side_shadow(base, geometry)
+    if variant == 'bg_shadow':
+        return bg_shadow(base, geometry)
+    if variant == 'bg_gradient':
+        return bg_gradient(base, geometry)
+    if variant == 'ink_stain':
+        return ink_stain(base, geometry)
+    if variant == 'smoothed':
+        return smoothed(base, geometry)
     raise ValueError(variant)
 
 

@@ -13,7 +13,9 @@ import pytest
 from PIL import Image
 
 from edutap.image_api.core import PassportPhotoValidator
+from edutap.image_api.core.checks import geometry
 from edutap.image_api.core.config import ValidatorConfig
+from edutap.image_api.core.models import Crop
 from edutap.image_api.core.utils import convert_to_bgr
 
 IMAGES = pathlib.Path(__file__).parent / 'test-images'
@@ -44,7 +46,8 @@ def id_photo(photo):
 
 
 def _statuses(validator, image):
-    return {check.name: check.status for check in validator(image).checks}
+    # Check statuses only; the crop would run the checks a second time on these square photos
+    return {check.name: check.status for check in validator(image, crop=False).checks}
 
 
 def _jpeg(image_bgr, quality):
@@ -56,7 +59,7 @@ def _jpeg(image_bgr, quality):
 def test_original_passes_the_classic_checks(validator, photo):
     statuses = _statuses(validator, photo)
     for name in ('exposure', 'face_sharpness', 'compression', 'red_eyes', 'gaze', 'background_brightness',
-                 'background_pattern'):
+                 'background_pattern', 'background_gradient', 'background_shadow', 'print_defects', 'skin_smoothing'):
         assert statuses[name] == 'pass', name
 
 
@@ -92,6 +95,51 @@ def test_faint_stripes_on_the_background_fail_background_pattern(validator, phot
     stripes = ((rows + cols) % 24 < 6) & _background(photo)
     striped = np.clip(photo + stripes[..., None] * 20, 0, 255).astype(np.uint8)
     assert _statuses(validator, striped)['background_pattern'] == 'fail'
+
+
+def test_shadow_next_to_the_person_fails_background_shadow(validator, photo):
+    # The person's silhouette shifted right and down, darkened: a cast shadow from a flash on the left
+    h, w = photo.shape[:2]
+    person = ~_background(photo)
+    shifted = np.zeros_like(person)
+    shifted[int(h * 0.02):, int(w * 0.06):] = person[:h - int(h * 0.02), :w - int(w * 0.06)]
+    shade = cv2.GaussianBlur((shifted & ~person).astype(np.float32), (0, 0), w * 0.01)
+    shadowed = np.clip(photo * (1 - 0.4 * shade)[..., None], 0, 255).astype(np.uint8)
+    statuses = _statuses(validator, shadowed)
+    assert statuses['background_shadow'] == 'fail'
+    assert statuses['background_gradient'] == 'pass'
+
+
+def test_background_running_light_to_dark_fails_background_gradient(validator, photo):
+    # The background (L* 59) darkens to 30% from left to right: a change of about 40 L*
+    factor = np.where(_background(photo), np.linspace(1.0, 0.3, photo.shape[1], dtype=np.float32)[None, :], 1.0)
+    graded = np.clip(photo * factor[..., None], 0, 255).astype(np.uint8)
+    statuses = _statuses(validator, graded)
+    assert statuses['background_gradient'] == 'fail'
+    assert statuses['background_shadow'] == 'pass'
+
+
+def test_spots_on_the_background_fail_print_defects(validator, photo):
+    h, w = photo.shape[:2]
+    stained = photo.copy()
+    for fx, fy, radius in ((0.08, 0.1, 0.02), (0.92, 0.1, 0.015), (0.06, 0.5, 0.012)):
+        cv2.circle(stained, (int(w * fx), int(h * fy)), int(w * radius), (30, 40, 60), -1)
+    stained = np.where(_background(photo)[..., None], stained, photo)
+    assert _statuses(validator, stained)['print_defects'] == 'fail'
+
+
+def test_smoothed_skin_warns_skin_smoothing(validator, photo):
+    # A beauty filter: the skin flattened, the eyes left as they are
+    smooth = cv2.edgePreservingFilter(photo, flags=cv2.RECURS_FILTER, sigma_s=40, sigma_r=0.25)
+    with mp.solutions.face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1, refine_landmarks=True) as mesh:
+        points = mesh.process(np.ascontiguousarray(photo[..., ::-1])).multi_face_landmarks[0].landmark
+    h, w = photo.shape[:2]
+    for outer, inner in ((33, 133), (362, 263)):
+        x0, x1 = sorted((int(points[outer].x * w), int(points[inner].x * w)))
+        y = int((points[outer].y + points[inner].y) / 2 * h)
+        width = x1 - x0
+        smooth[y - width // 2:y + width // 2, x0 - width // 4:x1 + width // 4] = photo[y - width // 2:y + width // 2, x0 - width // 4:x1 + width // 4]
+    assert _statuses(validator, smooth)['skin_smoothing'] == 'warn'
 
 
 def _red_pupils(image_bgr):
@@ -137,6 +185,47 @@ def test_photo_with_every_rule_judged_and_no_error_is_valid(validator, id_photo)
     report = validator(id_photo)
     assert report.skipped_rules == []
     assert report.is_valid
+
+
+def test_square_photo_gets_a_35x45_crop_that_fixes_the_format(photo):
+    report = PassportPhotoValidator(ValidatorConfig(ofiq_config_dir=None))(photo)
+    crop = report.crop
+    assert crop.status == 'proposed'
+    assert crop.height == photo.shape[0] and abs(crop.width / crop.height - 35 / 45) < 0.002
+    assert 'photo_format' in crop.fixed_rules
+
+
+def test_framed_photo_needs_no_crop(id_photo):
+    report = PassportPhotoValidator(ValidatorConfig(ofiq_config_dir=None))(id_photo)
+    assert report.crop == Crop('not_needed')
+
+
+def test_the_crop_never_changes_the_verdict(validator, photo):
+    with_crop, without_crop = validator(photo), validator(photo, crop=False)
+    assert without_crop.crop is None
+    assert with_crop.is_valid == without_crop.is_valid
+    assert [(rule.id, rule.status) for rule in with_crop.rules] == [(rule.id, rule.status) for rule in without_crop.rules]
+
+
+@needs_ofiq
+def test_square_photo_is_valid_after_the_crop(validator, photo):
+    report = validator(photo)
+    assert not report.is_valid
+    assert report.crop.is_valid and report.crop.remaining_rules == []
+
+
+@needs_ofiq
+def test_photo_with_a_crashed_check_is_not_valid(validator, id_photo, monkeypatch):
+    def crash(context):
+        raise ValueError('boom')
+
+    # face_centered shares the template_zones rule with face_size, which passes
+    monkeypatch.setattr(geometry, 'check_face_centered', crash)
+    report = validator(id_photo)
+    checks = {check.name: check for check in report.checks}
+    assert checks['face_centered'].status == 'error' and checks['face_size'].status == 'pass'
+    assert {'face_centered', 'template_zones'} <= set(report.skipped_rules)
+    assert not report.is_valid
 
 
 def test_without_siglip_its_checks_are_skipped_with_the_reason(photo):

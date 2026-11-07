@@ -76,7 +76,10 @@ RULES: List[Rule] = [
          ('red_eyes',), 'full'),
 
     # Background
-    Rule('background_no_shadows', 'background', 'No shadows on the background'),
+    Rule('background_no_shadows', 'background', 'No shadows on the background',
+         ('background_shadow',), 'full',
+         'How much darker the background next to the person is than farther away. A darkening across the '
+         'whole photo counts as a gradient (no_color_gradients) instead.'),
     Rule('background_no_objects', 'background', 'No objects in the background',
          ('background_uniformity', 'ofiq_background'), 'full'),
     Rule('background_plain', 'background', 'No patterned background (e.g. wallpaper)',
@@ -89,8 +92,13 @@ RULES: List[Rule] = [
 
     # Photo quality
     Rule('no_color_gradients', 'photo_quality', 'No color gradients',
-         note='The background consistency check lets smooth gradients pass on purpose.'),
-    Rule('no_print_errors', 'photo_quality', 'No errors such as ink stains'),
+         ('background_gradient',), 'partial',
+         'The lightness change across the background (a plane fitted to it). A change of hue at the same '
+         'lightness is not measured.'),
+    Rule('no_print_errors', 'photo_quality', 'No errors such as ink stains',
+         ('print_defects',), 'partial',
+         'Spots, stains and scratches of up to about 4 mm on the background. Larger marks count as objects '
+         '(background_no_objects); marks on the face or clothes are not told from features.'),
     Rule('no_pixelation', 'photo_quality', 'No pixelation',
          ('resolution', 'compression'), 'full',
          'Minimum resolution and JPEG block artefacts.'),
@@ -144,7 +152,11 @@ RULES: List[Rule] = [
          'Head covering pixels above the eyes (ISO/IEC 29794-5). Caught 9 in 10 real hats, with 8% false warnings.'),
 
     # Retouching
-    Rule('no_retouching', 'retouching', 'Not retouched or filtered (e.g. Snapchat filters)'),
+    Rule('no_retouching', 'retouching', 'Not retouched or filtered (e.g. Snapchat filters)',
+         ('skin_smoothing',), 'partial',
+         'Skin smoothing, as beauty filters do: the cheeks and forehead lose their texture while the eyes stay '
+         'sharp. Warning only, calibrated on synthetic smoothing. Other edits (a swapped background, stickers, '
+         'reshaped features) are not detected.'),
 ]
 
 _RAN = ('pass', 'warn', 'fail')
@@ -154,8 +166,9 @@ _SEVERITY = {'pass': 0, 'warn': 1, 'fail': 2}
 def evaluate_rules(checks: List[CheckResult]) -> List[RuleResult]:
     """Derive each rule's status from the checks that cover it.
 
-    A rule gets the worst status of its checks that ran. If none of them ran, it is 'skipped';
-    if it has no checks at all, it is 'not_checked'.
+    A rule gets the worst status of its checks that ran. If none of them ran, or one of them crashed
+    and none failed, it is 'skipped': without every check's verdict the rule can't pass, while a fail
+    stands on its own. A rule with no checks at all is 'not_checked'.
     """
     by_name = {check.name: check for check in checks}
     results = []
@@ -163,12 +176,14 @@ def evaluate_rules(checks: List[CheckResult]) -> List[RuleResult]:
     for rule in RULES:
         covering = [by_name[name] for name in rule.checks if name in by_name]
         ran = [check for check in covering if check.status in _RAN]
+        crashed = [check for check in covering if check.status == 'error']
 
         if not rule.checks:
             status, reasons = 'not_checked', []
-        elif not ran:
+        elif not ran or (crashed and not any(check.status == 'fail' for check in ran)):
             status = 'skipped'
-            reasons = [reason for check in covering for reason in check.reasons] or ['No covering check ran.']
+            reasons = [reason for check in covering if check.status not in _RAN for reason in check.reasons]
+            reasons = reasons or ['No covering check ran.']
         else:
             status = max((check.status for check in ran), key=_SEVERITY.__getitem__)
             reasons = [reason for check in ran if check.status != 'pass' for reason in check.reasons]

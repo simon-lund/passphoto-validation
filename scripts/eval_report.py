@@ -39,6 +39,10 @@ TARGETS = {
     'bg_object': ['background_uniformity', 'ofiq_background'],
     'colour_cast': ['ofiq_natural_colour'],
     'side_shadow': ['ofiq_illumination'],
+    'bg_shadow': ['background_shadow'],
+    'bg_gradient': ['background_gradient'],
+    'ink_stain': ['print_defects'],
+    'smoothed': ['skin_smoothing'],
 }
 
 

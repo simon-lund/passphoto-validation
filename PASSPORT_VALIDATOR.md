@@ -40,7 +40,7 @@ See the whole pipeline at work on the sample photos (per rule and per check, plu
 uv run --extra test jupyter lab notebooks/pipeline_overview.ipynb
 ```
 
-`notebooks/evaluation.ipynb` shows how every check and rule does on about 2,200 labelled photos, and why the thresholds are where they are. `notebooks/visualize_checks2.ipynb` shows the internals of the background checks. Other entry points:
+`notebooks/evaluation.ipynb` shows how every check and rule does on about 2,200 labelled photos, and why the thresholds are where they are. `notebooks/visualize_checks2.ipynb` shows the internals of the background checks. `notebooks/api.ipynb` sends photos to the API and shows both answers, the JSON and the HTML report. Other entry points:
 
 ```bash
 uv run passport-validator validate tests/test-images/9.jpg -v
@@ -80,7 +80,7 @@ Pure business logic with zero dependencies on CLI or API frameworks.
 
 **Features:**
 - German ID photo rules (Fotomustertafel), measured largely with ISO/IEC 29794-5 (OFIQ)
-- 33 checks, each reported with status, reasons and measurements
+- 37 checks, each reported with status, reasons and measurements
 - Detailed measurements and scoring
 - Suggested crop regions for fixes
 
@@ -148,7 +148,9 @@ GET  /v1/rules     the rule catalogue
 GET  /health
 ```
 
-Errors are `{"code": "...", "detail": "..."}`; branch on `code`.
+`/v1/check` answers in JSON unless the request's `Accept` header prefers `text/html` over `application/json` (a browser's does, `*/*` doesn't). Then it returns the same report as one self-contained HTML page (`report_html.py`, `templates/report.html`): the verdict, what to fix, the photo with the detected face and the planned 35x45 crop drawn in, what that crop fixes, and every rule by group with its checks and measurements. The photo is embedded (at most 800 px), and so is the JSON answer, which the page's Copy JSON and Download JSON buttons hand out; the page can be saved, mailed or attached as it is. Both answers carry `Vary: Accept`.
+
+The JSON answer's schema is in `/docs` and `/openapi.json` (`api_schema.py`: the models describe the answer, they don't produce it, and the tests validate real answers against them with extra keys forbidden, so they can't drift). Errors are `{"code": "...", "detail": "..."}`, also when HTML was asked for; branch on the status and `code`, never on the text. The codes: `invalid_request` (422, the multipart field is missing), `image_empty` (400), `invalid_image` (400, not an image we can read), `image_too_large` (413, over 15 MB) and `internal_error` (500, a bug in the pipeline; the traceback is in the server log, not in the answer).
 
 **Usage:**
 ```bash
@@ -157,6 +159,9 @@ uv run passport-validator-api
 
 # Test with curl
 curl -F "file=@photo.jpg" http://127.0.0.1:9600/v1/check
+
+# The HTML report, saved to report.html
+curl -F "file=@photo.jpg" -H "Accept: text/html" -o report.html http://127.0.0.1:9600/v1/check
 ```
 
 ## Installation
@@ -248,13 +253,13 @@ print(f"Score: {report['overall_score']}")
 
 ## Validation Checks
 
-The validator runs 33 checks (`PassportPhotoValidator.check_names()`). Each ends as `pass`, `warn`, `fail`, `skipped` (it couldn't judge the photo, e.g. no face, or OFIQ isn't installed) or `error` (it crashed, which is a bug).
+The validator runs 37 checks (`PassportPhotoValidator.check_names()`). Each ends as `pass`, `warn`, `fail`, `skipped` (it couldn't judge the photo, e.g. no face, or OFIQ isn't installed) or `error` (it crashed, which is a bug).
 
-The German ID photo rules (Fotomustertafel) are listed in `core/rules.py`: 36 rules, each mapped to the checks that cover it. A rule takes the worst status of its checks that ran; a rule no check covers is `not_checked`, never a pass. A rule none of whose checks could run (OFIQ missing, no face landmarks) is `skipped`.
+The German ID photo rules (Fotomustertafel) are listed in `core/rules.py`: 36 rules, each mapped to the checks that cover it. A rule takes the worst status of its checks that ran; a rule no check covers is `not_checked`, never a pass. A rule none of whose checks could run (OFIQ missing, no face landmarks) is `skipped`, and so is a rule one of whose checks crashed while none failed: a passing check doesn't make up for one whose verdict is missing.
 
-A photo is valid (`is_valid`) only when no check reports an error **and** no rule is `skipped`: a photo the pipeline couldn't judge is never valid. `skipped_rules` lists those rules; each one's `reasons` say why. The 4 `not_checked` rules don't count against a photo, since no photo could pass them. Without OFIQ, every OFIQ rule is skipped, so no photo is valid.
+A photo is valid (`is_valid`) only when no check reports an error, no check crashed, **and** no rule is `skipped`: a photo the pipeline couldn't judge is never valid. `skipped_rules` lists those rules; each one's `reasons` say why. A `not_checked` rule (none at the moment) wouldn't count against a photo, since no photo could pass it. Without OFIQ, every OFIQ rule is skipped, so no photo is valid.
 
-25 rules are fully covered, 7 partly, and 4 not yet: background shadows, colour gradients, print errors such as ink stains, and retouching.
+26 rules are fully covered and 10 partly; each rule's `note` says what its checks leave out. The last four to get a check were background shadows, colour gradients, print errors such as ink stains, and retouching; they are the youngest checks, calibrated on synthetic defects only (see the table below), so treat their verdicts with more care than the rest.
 
 | Source | Checks |
 | --- | --- |
@@ -262,6 +267,9 @@ A photo is valid (`is_valid`) only when no check reports an error **and** no rul
 | Our own, on OFIQ's face parsing | `glasses_tint`, `glasses_glare` |
 | SigLIP SO400M zero-shot on OFIQ's eye region (optional, warn only) | `siglip_glasses_glare`, `siglip_gaze` |
 | Our own | `face_detected`, `resolution`, `photo_format` (35x45), `face_size` (head 70-80% of the height), `face_centered`, `face_sharpness`, `compression` (JPEG blocks), `exposure`, `contrast`, `background_brightness`, `background_uniformity`, `background_consistency`, `background_pattern`, `glare`, `gaze`, `red_eyes` |
+| Our own, on the selfie segmentation and face mesh (the youngest checks) | `background_gradient` (lightness change across a plane fitted to the background), `background_shadow` (how much darker the band next to the person is than that plane), `print_defects` (small high-contrast marks on the background), `skin_smoothing` (cheek and forehead texture relative to the eyes; warns only) |
+
+The four youngest checks were calibrated on the London Set's compliant crops and on synthetic defects made from them (`scripts/build_eval_set.py`: `bg_gradient`, `bg_shadow`, `ink_stain`, `smoothed`), not on real defects. On the test half (52 people the thresholds weren't chosen on) they fail no photo that should pass; `print_defects` warns on 2% of them (stray hair the segmentation misses reads as a mark). Over both halves, one of the 306 photos that should pass fails on marks (a copy rotated by 4°, whose replicated border adds streaks), 4% warn on marks and 1% on shadows; with them, 80% of the photos that should pass get neither a fail nor a warning on any rule, against 83% before. They catch every synthetic gradient (fail) and smoothing (warn, by design), 83% of the shadows with another 10% warned, and 96% of the stains with the rest warned. The shadow margins are thin: compliant crops reach a depth of 8.9 against a fail threshold of 9, and no real shadow was in the calibration. On real candid photos (Open Images), `skin_smoothing` warns on 3%: a posterised selfie, a doll and a very smooth child's portrait.
 
 Some OFIQ measures aren't used because they failed on the evaluation set:
 - `UnderExposurePrevention` rates well-lit dark skin as underexposed. On the London Set it scored below 100 only for Black subjects, down to 18. The `exposure` check judges the brightest parts of the photo instead.
@@ -342,6 +350,15 @@ Most false warnings here fall on photos that fail other rules anyway. On the Lon
   "checks": ["… one entry per check: name, status, reasons, measurements"],
   "rules": ["… one entry per rule: id, title, status, checks, coverage, reasons"],
   "skipped_rules": ["no_hat"],
+  "crop": {
+    "status": "proposed",
+    "reason": null,
+    "x": 237, "y": 0, "width": 1556, "height": 2000,
+    "is_valid": true,
+    "rules_after": {"photo_format": "pass", "…": "one status per rule, on the cropped photo"},
+    "fixed_rules": ["photo_format"],
+    "remaining_rules": []
+  },
   "summary": {
     "total_issues": 8,
     "errors": 5,
@@ -349,6 +366,16 @@ Most false warnings here fall on photos that fail other rules anyway. On the Lon
   }
 }
 ```
+
+**`crop`** is the fix for framing problems (`core/crop.py`). When `photo_format`, `face_size` or `face_centered` warns or fails, the validator plans a 35x45 box inside the photo that makes the head 72-79% of the height (the rule allows 70-80%), centres the face and puts it at the usual height. It keeps the head size the photo has when that is allowed. Then it runs every check again on the cropped photo. `status` is one of:
+
+- `not_needed`: no framing check warns or fails.
+- `not_possible`: no box fits inside the photo, the head can't be measured, or the crop would be below 413x531 px; `reason` says which.
+- `proposed`: the box, whether the cropped photo is valid (`is_valid`), each rule's status on it (`rules_after`), the rules it fixes (`fixed_rules`) and the ones that still fail or are skipped (`remaining_rules`), which need a new photo.
+
+Every key is present whatever the status; the ones that don't apply are `null` (`reason`, the box, `is_valid`) or empty (`rules_after`, the rule lists).
+
+It never adds background and never changes `is_valid` of the photo as sent; it only says what a crop would give. Photos with framing problems take about twice as long, since the checks run twice; `AUTOCROP=false` turns it off (then `crop` is `null`). `suggested_crop` is the older suggestion (3:4, face at 40%) and stays for compatibility; use `crop`.
 
 ## Benefits of Modular Architecture
 

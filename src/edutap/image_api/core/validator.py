@@ -7,11 +7,12 @@ import mediapipe as mp
 import numpy as np
 from PIL import Image
 
-from .checks import background, eyes, features, geometry, lighting, quality
+from .checks import background, eyes, features, geometry, lighting, quality, retouching
 from .checks import ofiq as ofiq_checks
 from . import siglip
 from .config import ValidatorConfig
-from .models import CheckResult, CheckSkipped, PassportPhotoReport, ValidationIssue, ValidationContext
+from .crop import FRAMING_CHECKS, plan_crop
+from .models import CheckResult, CheckSkipped, Crop, PassportPhotoReport, ValidationIssue, ValidationContext
 from .ofiq import load_engine
 from .rules import evaluate_rules
 
@@ -45,12 +46,56 @@ class PassportPhotoValidator:
         self.ofiq, self.ofiq_unavailable = load_engine(self.config.ofiq_config_dir, self.config.ofiq_config_file)
         self.siglip, self.siglip_unavailable = siglip.load_engine(self.config.siglip_enabled, self.config.siglip_threads)
 
-    def validate(self, image_np: np.ndarray) -> PassportPhotoReport:
+    def validate(self, image_np: np.ndarray, crop: bool = True) -> PassportPhotoReport:
         """Run all validation checks on the provided image and return a report.
 
         :param image_np: Image as a numpy array (BGR format for OpenCV)
+        :param crop: Also plan a 35x45 crop when a framing check warns or fails, and check the cropped
+                     photo (report.crop). Needs config.autocrop too. The verdict never depends on it.
         :return: PassportPhotoReport with validation results
         """
+        report = self._validate(image_np)
+        if crop and self.config.autocrop:
+            report.crop = self._crop(image_np, report)
+        return report
+
+    def _crop(self, image_np: np.ndarray, report: PassportPhotoReport) -> Crop:
+        """Plan the crop for a photo with framing problems and check the cropped photo.
+
+        Statuses: not_needed (no framing check warns or fails), not_possible (with the reason) or
+        proposed (the box, the cropped photo's verdict and how each rule changes).
+        """
+        statuses = {check.name: check.status for check in report.checks}
+        if not any(statuses.get(name) in ('warn', 'fail') for name in FRAMING_CHECKS):
+            return Crop('not_needed')
+        measurements = report.measurements
+        if not report.bbox or 'chin_y' not in measurements or 'crown_y' not in measurements:
+            return Crop('not_possible', reason='The head could not be measured, so no crop can be planned.')
+
+        height, width = image_np.shape[:2]
+        box, reason = plan_crop(width, height, report.bbox, measurements['chin_y'], measurements['crown_y'])
+        if box is None:
+            return Crop('not_possible', reason=reason)
+        min_width, min_height = self.config.min_res
+        if box.width < min_width or box.height < min_height:
+            return Crop('not_possible', reason=f'The cropped photo would be {box.width}x{box.height} px; '
+                                               f'it needs at least {min_width}x{min_height} px.')
+
+        cropped = np.ascontiguousarray(image_np[box.y:box.y + box.height, box.x:box.x + box.width])
+        after = self._validate(cropped)
+        before = {rule.id: rule.status for rule in report.rules}
+        return Crop(
+            'proposed',
+            x=box.x, y=box.y, width=box.width, height=box.height,
+            is_valid=after.is_valid,
+            rules_after={rule.id: rule.status for rule in after.rules},
+            # Rules that warn or fail now and pass on the cropped photo
+            fixed_rules=[rule.id for rule in after.rules if before[rule.id] in ('warn', 'fail') and rule.status == 'pass'],
+            # Rules that keep the cropped photo from being valid; a crop can't fix them, they need a new photo
+            remaining_rules=[rule.id for rule in after.rules if rule.status in ('fail', 'skipped')],
+        )
+
+    def _validate(self, image_np: np.ndarray) -> PassportPhotoReport:
         context = ValidationContext(image_np=image_np)
 
         # 1. Detect faces and check for exclusion criteria (no faces or multiple faces)
@@ -111,6 +156,14 @@ class PassportPhotoValidator:
             # The London Set's plain backgrounds stay below 7 at 1063 px height (below 14 at 800 px); the faint UN
             # flag in Open Images measures 34 (background labels: openimages-faces/eval/vlm_background_labels.jsonl)
             ('background_pattern', background.check_background_pattern, dict(warn_above=10, fail_above=20)),
+            # Calibrated on the London Set's compliant crops and synthetic defects built from them
+            # (scripts/build_eval_set.py: bg_gradient, bg_shadow, ink_stain, smoothed). Compliant crops reach a
+            # gradient of 16, a shadow depth of 9 (one photo; 98% stay under 5) and 2 marks; the defects start
+            # at 41, 3 (90% above 5) and 3 marks. Filtered skin stays under 0.14, natural skin above 0.19
+            ('background_gradient', background.check_background_gradient, dict(warn_above=18, fail_above=30)),
+            ('background_shadow', background.check_background_shadow, dict(warn_above=5, fail_above=9)),
+            ('print_defects', quality.check_print_defects, dict(fail_at=3)),
+            ('skin_smoothing', retouching.check_skin_smoothing, dict(warn_below=0.15)),
             ('glare', features.check_glasses, {}),
             *self._ofiq_checks(),
             ('gaze', eyes.check_gaze, dict(warn_above=0.08, fail_above=0.15)),
@@ -202,9 +255,9 @@ class PassportPhotoValidator:
             measurements=measurements,
         )
 
-    def __call__(self, image_np: np.ndarray) -> PassportPhotoReport:
+    def __call__(self, image_np: np.ndarray, crop: bool = True) -> PassportPhotoReport:
         """Allow the instance to be called directly (i.e., validator(image_np))."""
-        return self.validate(image_np)
+        return self.validate(image_np, crop=crop)
 
     def _populate_segmentation_data(self, context: ValidationContext):
         """
@@ -309,9 +362,10 @@ class PassportPhotoValidator:
         total_deduction = sum(issue.severity for issue in context.issues)
         score = max(0, 100 - total_deduction)
         rules = evaluate_rules(checks)
-        # Valid only if no check found an error and every rule that has checks could be judged
+        # Valid only if no check found an error, none crashed, and every rule that has checks could be judged
         skipped_rules = [rule.id for rule in rules if rule.status == 'skipped']
-        is_valid = not skipped_rules and not any(issue.category == 'error' for issue in context.issues)
+        is_valid = (not skipped_rules and not any(issue.category == 'error' for issue in context.issues)
+                    and not any(check.status == 'error' for check in checks))
 
         return PassportPhotoReport(
             is_valid=is_valid,

@@ -38,6 +38,8 @@ dependencies = [
     "brisque>=0.0.17",
     "pydantic-settings>=2.15.0",
     "scikit-image>=0.25.2",
+    # The HTML report of /v1/check (report_html.py)
+    "jinja2>=3.1",
 ]
 
 [project.urls]
@@ -92,6 +94,9 @@ explicit = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"edutap.image_api" = ["templates/*.html"]
 
 [tool.pytest.ini_options]
 minversion = "6.0"

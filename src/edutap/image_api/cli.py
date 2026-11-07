@@ -153,6 +153,15 @@ def _display_report(report, verbose: bool):
         console.print(f"  Crop region: x={crop['x']}, y={crop['y']}, "
                       f"width={crop['width']}, height={crop['height']}")
 
+    # A 35x45 crop for framing problems, checked on the cropped photo
+    crop = report.crop
+    if crop and crop.status == 'proposed':
+        verdict = "[green]valid[/green]" if crop.is_valid else f"still fails {len(crop.remaining_rules)} rule(s)"
+        console.print(f"\n[bold]Crop to 35x45:[/bold] x={crop.x}, y={crop.y}, width={crop.width}, height={crop.height}")
+        console.print(f"  Fixes {len(crop.fixed_rules)} rule(s); the cropped photo is {verdict}.")
+    elif crop and crop.status == 'not_possible':
+        console.print(f"\n[bold]Crop to 35x45:[/bold] not possible. {crop.reason}")
+
     # Measurements (verbose mode)
     if verbose and report.measurements:
         console.print("\n[bold]Measurements:[/bold]")

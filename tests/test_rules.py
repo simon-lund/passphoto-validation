@@ -1,7 +1,8 @@
 """Pin the rule catalogue and how rule statuses are derived from checks."""
 from edutap.image_api.core import PassportPhotoValidator
 from edutap.image_api.core.models import CheckResult
-from edutap.image_api.core.rules import GROUPS, RULES, evaluate_rules
+from edutap.image_api.core import rules
+from edutap.image_api.core.rules import GROUPS, RULES, Rule, evaluate_rules
 
 
 def _check_names():
@@ -48,7 +49,24 @@ def test_rule_is_skipped_when_no_covering_check_ran():
     assert rule.reasons == ['ValueError: boom']
 
 
-def test_rule_without_checks_is_not_checked():
-    rule = _result('no_retouching', [])
+def test_rule_is_skipped_when_a_covering_check_crashed_and_none_failed():
+    # template_zones has two checks; one passing does not make up for the other crashing
+    checks = [CheckResult('face_centered', 'error', ['ValueError: boom']), CheckResult('face_size', 'pass')]
+    rule = _result('template_zones', checks)
+    assert rule.status == 'skipped'
+    assert rule.reasons == ['ValueError: boom']
+
+
+def test_a_failed_check_outweighs_a_crashed_one():
+    checks = [CheckResult('face_centered', 'error', ['ValueError: boom']), CheckResult('face_size', 'fail', ['too small'])]
+    rule = _result('template_zones', checks)
+    assert rule.status == 'fail'
+    assert rule.reasons == ['too small']
+
+
+def test_rule_without_checks_is_not_checked(monkeypatch):
+    # Every rule has a check now, so the catalogue is swapped for one that doesn't
+    monkeypatch.setattr(rules, 'RULES', [Rule('future_rule', 'retouching', 'Not covered yet')])
+    rule = _result('future_rule', [CheckResult('face_centered', 'pass')])
     assert rule.status == 'not_checked'
     assert rule.coverage == 'none'

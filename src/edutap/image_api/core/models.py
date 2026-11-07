@@ -45,7 +45,8 @@ RuleStatus = Literal["pass", "warn", "fail", "skipped", "not_checked"]
 """Outcome of one photo rule (from the Fotomustertafel) on one photo.
 
 - pass / warn / fail: worst outcome of the checks that cover the rule and ran.
-- skipped: checks cover the rule, but none of them could run on this photo.
+- skipped: the rule could not be judged: none of its checks could run on this photo, or one of them
+  crashed and none failed. A photo with a skipped rule is never valid.
 - not_checked: no check covers the rule yet.
 """
 
@@ -61,6 +62,32 @@ class RuleResult:
     coverage: Literal["full", "partial", "none"] = "none"
     reasons: List[str] = field(default_factory=list)
     note: Optional[str] = None
+
+
+CropStatus = Literal["not_needed", "not_possible", "proposed"]
+
+
+@dataclass
+class Crop:
+    """The 35x45 crop for a photo with framing problems (see PassportPhotoValidator._crop).
+
+    The keys are the same whatever the status; the ones that don't apply are None or empty.
+
+    - not_needed: no framing check warns or fails.
+    - not_possible: no box fits inside the photo, or the head can't be measured; `reason` says why.
+    - proposed: the box in the photo's pixels, whether the cropped photo is valid, each rule's status
+      on it, the rules the crop fixes and the ones that still keep it from being valid.
+    """
+    status: CropStatus
+    reason: Optional[str] = None
+    x: Optional[int] = None
+    y: Optional[int] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    is_valid: Optional[bool] = None
+    rules_after: Dict[str, RuleStatus] = field(default_factory=dict)
+    fixed_rules: List[str] = field(default_factory=list)
+    remaining_rules: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -104,6 +131,8 @@ class PassportPhotoReport:
     rules: List[RuleResult] = field(default_factory=list)
     # Rules none of whose checks could run (their reasons are on the rule); a photo with any is not valid
     skipped_rules: List[str] = field(default_factory=list)
+    # The 35x45 crop for framing problems; None when cropping is turned off. Never changes is_valid.
+    crop: Optional[Crop] = None
 
     def to_dict(self):
         """Convert report to a dictionary, suitable for JSON serialization."""

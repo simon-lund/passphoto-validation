@@ -56,3 +56,6 @@ var/
 /letsencrypt/
 /db/
 db/
+
+# jupyter
+.ipynb_checkpoints/

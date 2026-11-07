@@ -46,6 +46,12 @@ class ValidatorConfig(BaseSettings):
         description="The recommended minimum image height."
     )
 
+    autocrop: bool = Field(
+        default=True,
+        description="Plan a 35x45 crop for photos whose framing checks warn or fail, and check the cropped photo "
+                    "(runs the checks a second time on those photos). The verdict never depends on it."
+    )
+
     ofiq_config_dir: Optional[str] = Field(
         default=None,
         description="OFIQ's data folder (holds ofiq_config.jaxn and models/). Without it the OFIQ checks are skipped."

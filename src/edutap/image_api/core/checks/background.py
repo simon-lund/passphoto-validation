@@ -396,7 +396,8 @@ def check_background_pattern(context: ValidationContext, warn_above: float, fail
 def check_background_consistency(context: ValidationContext, cov_threshold: float = 0.5, debug: bool = False):
     """
     Check for consistent color transitions using Coefficient of Variation.
-    Smooth gradients have low CoV; cluttered backgrounds have high CoV.
+    Smooth gradients have low CoV; cluttered backgrounds have high CoV. So a gradient passes here, and
+    check_background_gradient reports it.
 
     :param context: The validation context with segmentation data.
     :param cov_threshold: Maximum acceptable coefficient of variation.
@@ -477,3 +478,123 @@ def check_background_clutter(context: ValidationContext, edge_density_threshold:
             'edge_density_map': edge_viz
         }
     return None
+
+
+def _background_lightness(context: ValidationContext, band_share: float = 0.03):
+    """Lightness (L*, 0-100, lightly blurred) of the photo, and each pixel's distance to the person in bands.
+
+    A band is 3% of the short side. Closer than one band to the person the selfie segmentation's edge is
+    not reliable (hair, soft shoulders), so no check below looks there.
+    """
+    mask = context.person_mask_binary
+    if mask is None:
+        raise CheckSkipped('No segmentation mask present.')
+    if not mask.any():
+        raise CheckSkipped('The segmentation found no person.')
+    band = max(3, int(round(min(context.width, context.height) * band_share)))
+    lightness = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2LAB)[..., 0].astype(np.float32) * (100 / 255)
+    lightness = cv2.GaussianBlur(lightness, (0, 0), band / 3)
+    distance = cv2.distanceTransform((mask == 0).astype(np.uint8), cv2.DIST_L2, 5) / band
+    return lightness, distance, band
+
+
+def _fit_plane(values: np.ndarray, where: np.ndarray, max_samples: int = 20000, trim: float = None):
+    """Least-squares plane through the pixels in `where`, as (plane over the whole image, (a, b, c)) with
+    values = a * x + b * y + c for x, y in 0..1 of the width and height. None with too few pixels.
+
+    With `trim`, the pixels farther than that from the first plane (an object, a shadow, stray hair) are
+    left out and the plane fitted again, so it follows the backdrop rather than what sits in front of it.
+    """
+    ys, xs = np.nonzero(where)
+    if len(xs) < 50:
+        return None
+    step = max(1, len(xs) // max_samples)
+    xs, ys = xs[::step], ys[::step]
+    h, w = values.shape
+    design = np.column_stack([xs / w, ys / h, np.ones(len(xs))])
+    samples = values[ys, xs]
+    coefficients, *_ = np.linalg.lstsq(design, samples, rcond=None)
+    if trim is not None:
+        keep = np.abs(samples - design @ coefficients) <= trim
+        if keep.sum() >= 50:
+            coefficients, *_ = np.linalg.lstsq(design[keep], samples[keep], rcond=None)
+    rows, cols = np.mgrid[:h, :w]
+    plane = coefficients[0] * cols / w + coefficients[1] * rows / h + coefficients[2]
+    return plane.astype(np.float32), coefficients
+
+
+def check_background_gradient(context: ValidationContext, warn_above: float, fail_above: float):
+    """Check that the background doesn't run from light to dark: the lightness change across the photo of a
+    plane fitted to the background, in L* (0-100).
+
+    A plain backdrop under even light changes by up to about 16 L* across the photo (London Set); a gradient
+    backdrop, or a lamp on one side, by 40 or more. The fit leaves out what sits in front of the backdrop
+    (an object, stray hair, a shadow next to the person, which check_background_shadow reports).
+
+    :param warn_above: L* change across the photo above which it warns.
+    :param fail_above: L* change above which it fails.
+    """
+    lightness, distance, _ = _background_lightness(context)
+    clear = distance > 1
+    if clear.mean() < 0.02:
+        raise CheckSkipped('Too little background to judge its gradient.')
+    fit = _fit_plane(lightness, clear, trim=6)
+    if fit is None:
+        raise CheckSkipped('Too little background to judge its gradient.')
+    _, (a, b, _) = fit
+    span = float(abs(a) + abs(b))
+    context.measurements['background_gradient'] = span
+
+    if span > fail_above:
+        context.issues.append(ValidationIssue(
+            category='error', severity=6,
+            message=f'The background runs from light to dark (by {span:.0f} L* across the photo). It must be evenly lit, in one colour.'))
+    elif span > warn_above:
+        context.issues.append(ValidationIssue(
+            category='warning', severity=3,
+            message=f'The background is lighter on one side than the other (by {span:.0f} L* across the photo).'))
+
+
+def check_background_shadow(context: ValidationContext, warn_above: float, fail_above: float):
+    """Check for a shadow cast on the background next to the person: how much darker the band around the
+    person is than the background farther away, in L* (0-100).
+
+    The band runs from one to three bands (3-9% of the short side) from the person. A plane fitted to the
+    background beyond it gives the expected lightness, so a gradient across the whole photo doesn't count
+    as a shadow. A flash throws the shadow to one side, so the band is judged left and right of the face
+    separately: `background_shadow_depth` is how far the darkest quarter of the darker side falls below
+    the plane. Plain backdrops stay below 6 (London Set).
+
+    :param warn_above: Depth in L* above which it warns.
+    :param fail_above: Depth above which it fails.
+    """
+    lightness, distance, _ = _background_lightness(context)
+    near = (distance > 1) & (distance <= 3)
+    fit = _fit_plane(lightness, distance > 3, trim=6) if near.sum() >= 200 else None
+    if fit is None:
+        raise CheckSkipped('Too little background around the person to look for shadows.')
+    plane, _ = fit
+    residual = lightness - plane
+
+    bbox = context.face_data.get('bbox')
+    centre_x = bbox['x'] + bbox['width'] / 2 if bbox else context.width / 2
+    columns = np.arange(context.width)[None, :]
+    depths = []
+    for side in (columns < centre_x, columns >= centre_x):
+        pixels = residual[near & side]
+        if len(pixels) >= 100:
+            depths.append(-np.percentile(pixels, 25))
+    if not depths:
+        raise CheckSkipped('Too little background around the person to look for shadows.')
+    depth = float(max(depths))
+    context.measurements['background_shadow_depth'] = depth
+    context.measurements['background_shadow_share'] = float((residual[near] < -4).mean())
+
+    if depth > fail_above:
+        context.issues.append(ValidationIssue(
+            category='error', severity=6,
+            message=f'A shadow falls on the background next to the person ({depth:.0f} L* darker). Light the background evenly or move away from it.'))
+    elif depth > warn_above:
+        context.issues.append(ValidationIssue(
+            category='warning', severity=3,
+            message=f'The background is darker next to the person ({depth:.0f} L*), which looks like a shadow.'))

@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Photo check{% if filename %}: {{ filename }}{% endif %}</title>
+<style>
+  :root {
+    color-scheme: light;
+    --mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+    --paper: oklch(0.985 0.003 250);
+    --panel: oklch(0.952 0.005 250);
+    --line: oklch(0.85 0.007 250);
+    --ink: oklch(0.21 0.012 250);
+    --muted: oklch(0.47 0.012 250);
+    --fail: oklch(0.55 0.2 28);
+    --on-fail: oklch(0.985 0.003 250);
+    --warn: oklch(0.84 0.15 82);
+    --on-warn: oklch(0.21 0.012 250);
+    --pass: oklch(0.91 0.055 150);
+    --on-pass: oklch(0.33 0.08 150);
+    --err: oklch(0.43 0.19 300);
+    --on-err: oklch(0.985 0.003 250);
+    --face: oklch(0.55 0.22 262);
+    --crop: oklch(0.58 0.23 335);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --paper: oklch(0.17 0.008 250);
+      --panel: oklch(0.215 0.01 250);
+      --line: oklch(0.33 0.012 250);
+      --ink: oklch(0.93 0.006 250);
+      --muted: oklch(0.71 0.01 250);
+      --fail: oklch(0.68 0.19 28);
+      --on-fail: oklch(0.15 0.01 250);
+      --warn: oklch(0.8 0.15 82);
+      --on-warn: oklch(0.15 0.01 250);
+      --pass: oklch(0.31 0.06 150);
+      --on-pass: oklch(0.89 0.08 150);
+      --err: oklch(0.72 0.15 300);
+      --on-err: oklch(0.15 0.01 250);
+      --face: oklch(0.72 0.16 262);
+      --crop: oklch(0.74 0.18 335);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { background: var(--paper); }
+  body { max-width: 1600px; margin: 0 auto; background: var(--paper); color: var(--ink); font: 13px/1.45 var(--mono); font-variant-numeric: tabular-nums; }
+  @media (min-width: 1600px) {
+    html { background: var(--panel); }
+    body { outline: 2px solid var(--ink); }
+  }
+  a { color: inherit; }
+  a:focus-visible, summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+  h1, h2, h3, p { margin: 0; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; vertical-align: top; }
+
+  /* Labels: uppercase and tracked, the console's voice */
+  .label, th, h2, h3 { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+  .muted { color: var(--muted); }
+  /* Codes explain themselves on hover; on touch screens the counts link to the status codes below */
+  abbr[title] { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
+  .counts a { text-decoration: none; }
+
+  /* Status codes: square, bordered, filled by status; skipped is hatched and not_checked is open */
+  .st { display: inline-block; min-width: 6ch; padding: 1px 5px; border: 1px solid var(--ink); text-align: center;
+        font-size: 11px; font-weight: 700; letter-spacing: 0.06em; line-height: 1.35; white-space: nowrap; }
+  .st[data-status="fail"], .cell[data-status="fail"] { background: var(--fail); color: var(--on-fail); }
+  .st[data-status="warn"], .cell[data-status="warn"] { background: var(--warn); color: var(--on-warn); }
+  .st[data-status="pass"], .cell[data-status="pass"] { background: var(--pass); color: var(--on-pass); }
+  .st[data-status="error"], .cell[data-status="error"] { background: var(--err); color: var(--on-err); }
+  .st[data-status="skipped"], .cell[data-status="skipped"] {
+    background: repeating-linear-gradient(135deg, var(--paper) 0 3px, var(--line) 3px 5px); color: var(--ink); }
+  .st[data-status="not_checked"], .cell[data-status="not_checked"] { background: transparent; color: var(--muted); border-style: dashed; }
+
+  /* Top bar */
+  .bar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px 24px; padding: 6px 16px;
+         background: var(--ink); color: var(--paper); }
+  .bar .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+  /* Buttons on the ink bar: outlined, inverted on hover */
+  .btn { font: inherit; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; line-height: 1.35;
+         padding: 2px 8px; border: 1px solid var(--paper); background: transparent; color: var(--paper); text-decoration: none; cursor: pointer; }
+  .btn:hover { background: var(--paper); color: var(--ink); }
+  .btn:active { background: var(--line); color: var(--ink); }
+  .btn:focus-visible { outline: 2px solid var(--paper); outline-offset: 2px; }
+  .btn[data-state="done"] { background: var(--pass); color: var(--on-pass); border-color: var(--pass); }
+  .btn[data-state="error"] { background: var(--fail); color: var(--on-fail); border-color: var(--fail); }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+  /* Verdict row: a solid stamp, then the rule counts */
+  /* Dividers between grid cells are the ink background showing through a 2px gap */
+  .verdict { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; background: var(--ink); border-bottom: 2px solid var(--ink); }
+  .stamp { padding: 18px 16px 16px; font-size: 40px; font-weight: 800; line-height: 1; letter-spacing: -0.02em; text-transform: uppercase; }
+  .stamp[data-status="fail"] { background: var(--fail); color: var(--on-fail); }
+  .stamp[data-status="pass"] { background: var(--pass); color: var(--on-pass); }
+  .stamp .label { display: block; margin-bottom: 10px; letter-spacing: 0.08em; }
+  .stamp .after { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 11px; letter-spacing: 0.08em; }
+  .stamp .after .st { border-color: currentColor; }
+  /* A full cell grid; the hidden outer border leaves the lines between cells */
+  .counts { height: 100%; background: var(--paper); border-style: hidden; }
+  .counts th, .counts td { padding: 6px 10px; border: 1px solid var(--ink); }
+  .counts td { font-size: 24px; font-weight: 800; line-height: 1.1; }
+  .counts td.zero { color: var(--muted); font-weight: 400; }
+  @media (min-width: 720px) {
+    .verdict { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); }
+  }
+
+  /* Two columns: the photo and the rule map beside the rules */
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; background: var(--ink); }
+  .side, .main, .side-inner > section { background: var(--paper); }
+  .main > section:not(:last-child) { border-bottom: 2px solid var(--ink); }
+  .side-inner { display: grid; gap: 2px; background: var(--ink); }
+  @media (min-width: 640px) and (max-width: 979px) {
+    .side-inner { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  }
+  @media (min-width: 980px) {
+    .grid { grid-template-columns: 340px minmax(0, 1fr); }
+    .side { align-self: stretch; }
+    .side-inner { position: sticky; top: 0; padding-bottom: 2px; }
+  }
+  h2 { display: flex; justify-content: space-between; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--ink); }
+  h2 .n { font-weight: 400; }
+  .pad { padding: 12px 16px; }
+
+  /* Photo with the detected face and the suggested crop */
+  .photo { position: relative; margin: 12px 16px; border: 1px solid var(--ink); }
+  .photo svg { display: block; width: 100%; height: auto; }
+  .tag { position: absolute; transform: translateY(-100%); padding: 0 4px; font-size: 10px; font-weight: 700;
+         letter-spacing: 0.08em; text-transform: uppercase; color: var(--paper); white-space: nowrap; }
+  .tag.inside { transform: none; }
+  .tag.face { background: var(--face); }
+  .tag.crop { background: var(--crop); }
+  .facts { margin-bottom: 12px; }
+  .facts th, .facts td { padding: 3px 16px 3px 0; border-top: 1px solid var(--line); }
+  .facts th { width: 8ch; padding-left: 16px; color: var(--muted); }
+  .facts tr:first-child th, .facts tr:first-child td { border-top: 0; }
+
+  /* Rule map: every rule as one cell, by group; each links to its row */
+  .map { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; align-items: center; }
+  .map .group-name { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .map .cells { display: flex; gap: 2px; }
+  .cell { display: grid; place-items: center; width: 20px; height: 20px; border: 1px solid var(--ink);
+          font-size: 11px; font-weight: 700; text-decoration: none; }
+  .cell:hover { outline: 2px solid var(--ink); outline-offset: 1px; }
+
+  /* Rules that need attention */
+  .data { table-layout: fixed; }
+  .data .c-st { width: 84px; }
+  .data .c-rule { width: 38%; }
+  .data th { padding: 5px 10px; border-bottom: 1px solid var(--ink); color: var(--muted); }
+  .data td { padding: 6px 10px; border-bottom: 1px solid var(--line); }
+  .data tr:last-child td { border-bottom: 0; }
+  .data td:first-child, .data th:first-child { padding-left: 16px; }
+  .data a { font-weight: 700; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  .data .group { display: block; color: var(--muted); font-size: 11px; }
+  .lede { padding: 8px 16px 0; color: var(--muted); max-width: 75ch; }
+  .lede:last-child { padding-bottom: 12px; }
+  .lede strong { color: var(--ink); }
+  .change { white-space: nowrap; }
+  .change .to { margin: 0 6px; color: var(--muted); }
+
+  /* Every rule, by group; a row opens to its checks */
+  .group-head { display: flex; justify-content: space-between; padding: 6px 16px; background: var(--panel);
+                border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
+  .cols, .rule > summary { display: grid; grid-template-columns: 7ch minmax(0, 1fr) 7ch 3ch; gap: 12px; align-items: baseline; padding: 6px 16px; }
+  .cols { color: var(--muted); }
+  .rule { border-bottom: 1px solid var(--line); scroll-margin-top: 8px; }
+  .rule > summary { cursor: pointer; list-style: none; }
+  .rule > summary::-webkit-details-marker { display: none; }
+  .rule > summary:hover { background: var(--panel); }
+  .rule:target > summary { background: var(--panel); outline: 2px solid var(--ink); outline-offset: -2px; }
+  .rule-title { font-weight: 700; }
+  .rule-id { display: block; color: var(--muted); font-size: 11px; }
+  .cov { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; color: var(--muted); }
+  .toggle { text-align: right; color: var(--muted); }
+  .toggle::after { content: "+"; }
+  .rule[open] .toggle::after { content: "\2212"; }
+  .rule.bare > summary { cursor: default; }
+  .rule.bare .toggle::after { content: ""; }
+  .detail { padding: 2px 16px 12px calc(16px + 7ch + 12px); }
+  .reasons { margin: 0 0 8px; padding: 0; list-style: none; }
+  .reasons li::before { content: "> "; color: var(--muted); }
+  .checks { table-layout: fixed; border: 1px solid var(--ink); font-size: 12px; }
+  .checks .c-st { width: 72px; }
+  .checks .c-name { width: 22%; }
+  .checks .c-meas { width: 34%; }
+  .checks td, .data td { overflow-wrap: anywhere; }
+  .checks th { padding: 4px 8px; border-bottom: 1px solid var(--ink); color: var(--muted); background: var(--panel); }
+  .checks td { padding: 5px 8px; border-bottom: 1px solid var(--line); }
+  .checks tr:last-child td { border-bottom: 0; }
+  .checks .name { font-weight: 700; }
+  .kv { display: inline-block; margin-right: 14px; }
+  .kv .k { color: var(--muted); }
+  .note { margin-top: 8px; color: var(--muted); max-width: 75ch; }
+  .note .label { margin-right: 8px; }
+
+  .legend td { padding: 5px 10px; border-bottom: 1px solid var(--line); }
+  .legend td:first-child { width: 1%; padding-left: 16px; }
+  .legend tr:last-child td { border-bottom: 0; }
+
+  @media (max-width: 640px) {
+    .bar .meta { flex-basis: 100%; }
+    .stamp { font-size: 32px; }
+    .cols { display: none; }
+    .rule > summary { grid-template-columns: 7ch minmax(0, 1fr) 2ch; }
+    .rule > summary .cov { display: none; }
+    .detail { padding-left: 16px; }
+    /* Rows become stacked blocks; the tables drop their fixed columns */
+    .checks, .checks tbody, .data, .data tbody { display: block; }
+    .checks colgroup, .data colgroup, .checks thead { display: none; }
+    .checks tr { display: block; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+    .checks tr:last-child { border-bottom: 0; }
+    .checks td { display: block; padding: 2px 0; border: 0; }
+    .data thead { display: none; }
+    .data tr { display: block; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+    .data tr:last-child { border-bottom: 0; }
+    .data td, .data td:first-child { display: block; padding: 2px 0; border: 0; }
+  }
+</style>
+</head>
+<body>
+{% set w = report.image.width %}{% set h = report.image.height %}
+{% macro st(status) -%}
+<span class="st" data-status="{{ status }}" title="{{ statuses[status].label }}">{{ statuses[status].code }}</span>
+{%- endmacro %}
+{% macro checks_table(checks) -%}
+<table class="checks">
+  <colgroup><col class="c-st"><col class="c-name"><col class="c-meas"><col></colgroup>
+  <thead><tr><th>Status</th><th>Check</th><th>Measured</th><th>Reason</th></tr></thead>
+  <tbody>
+  {% for check in checks %}
+  <tr>
+    <td>{{ st(check.status) }}</td>
+    <td class="name">{{ breakable(check.name) }}</td>
+    <td>{% for key, value in check.measurements.items() %}<span class="kv"><span class="k">{{ breakable(key) }}</span> <span class="v">{{ fmt(value) }}</span></span>{% else %}<span class="muted">none</span>{% endfor %}</td>
+    <td>{% for reason in check.reasons %}{{ reason }}{% if not loop.last %}<br>{% endif %}{% else %}<span class="muted">none</span>{% endfor %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{%- endmacro %}
+{% macro attention(rules) -%}
+<table class="data">
+  <colgroup><col class="c-st"><col class="c-rule"><col></colgroup>
+  <thead><tr><th>Status</th><th>Rule</th><th>Why</th></tr></thead>
+  <tbody>
+  {% for rule in rules %}
+  <tr>
+    <td>{{ st(rule.status) }}</td>
+    <td><a href="#rule-{{ rule.id }}">{{ flat_title[rule.id] }}</a><span class="group">{{ group_titles[rule.group] }}</span></td>
+    <td>{{ rule.reasons[0] if rule.reasons else '' }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{%- endmacro %}
+
+<header>
+  <div class="bar label">
+    <span>passphoto-validation / check report</span>
+    <span class="actions">
+      <span class="meta">{% if filename %}{{ filename }} / {% endif %}{{ w }} × {{ h }} px</span>
+      {# The JSON answer for this photo, the same as with Accept: application/json; Copy needs the script below #}
+      <button type="button" class="btn" id="copy-json" hidden>Copy JSON</button>
+      <a class="btn" id="download-json" href="{{ json_uri }}" download="{{ json_filename }}">Download JSON</a>
+      <span class="sr-only" role="status" id="json-status"></span>
+    </span>
+  </div>
+  <div class="verdict">
+    <h1 class="stamp" data-status="{{ 'pass' if report.is_valid else 'fail' }}">
+      <span class="label">Verdict</span>{{ 'Valid' if report.is_valid else 'Not valid' }}
+      {% if not report.is_valid and crop_proposed and report.crop.is_valid %}<span class="after label"><span class="st" data-status="pass">Pass</span>after 35×45 crop</span>{% endif %}
+    </h1>
+    <table class="counts" aria-label="Rules by status">
+      <tr>{% for status in summary_order %}<th scope="col"><a href="#status-codes"><abbr title="{{ statuses[status].label }}: {{ statuses[status].meaning }}">{{ statuses[status].code }}</abbr></a></th>{% endfor %}</tr>
+      <tr>{% for status in summary_order %}<td{% if not counts[status] %} class="zero"{% endif %}>{{ counts[status] }}</td>{% endfor %}</tr>
+    </table>
+  </div>
+</header>
+
+<div class="grid">
+  <aside class="side">
+    <div class="side-inner">
+      <section>
+        <h2>Photo</h2>
+        <div class="photo">
+          <svg viewBox="0 0 {{ w }} {{ h }}" role="img" aria-label="The checked photo{% if report.bbox %} with the detected face marked{% endif %}">
+            <image href="{{ photo }}" x="0" y="0" width="{{ w }}" height="{{ h }}"/>
+            {% if report.bbox %}
+            <rect x="{{ report.bbox.x }}" y="{{ report.bbox.y }}" width="{{ report.bbox.width }}" height="{{ report.bbox.height }}" class="face" fill="none" stroke="var(--face)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+            {% endif %}
+            {% if crop_proposed %}
+            <rect x="{{ report.crop.x }}" y="{{ report.crop.y }}" width="{{ report.crop.width }}" height="{{ report.crop.height }}" class="crop" fill="none" stroke="var(--crop)" stroke-width="2" stroke-dasharray="6 4" vector-effect="non-scaling-stroke"/>
+            {% endif %}
+          </svg>
+          {% if report.bbox %}<span class="tag face{% if report.bbox.y < 0.06 * h %} inside{% endif %}" style="left: {{ pct(report.bbox.x, w) }}%; top: {{ pct(report.bbox.y, h) }}%">Face</span>{% endif %}
+          {% if crop_proposed %}<span class="tag crop{% if report.crop.y < 0.06 * h %} inside{% endif %}" style="left: {{ pct(report.crop.x, w) }}%; top: {{ pct(report.crop.y, h) }}%">35×45 crop</span>{% endif %}
+        </div>
+        <table class="facts">
+          <tr><th>File</th><td>{{ filename or 'unnamed' }}</td></tr>
+          <tr><th>Size</th><td>{{ w }} × {{ h }} px</td></tr>
+          <tr><th>Face</th><td>{% if report.bbox %}x {{ report.bbox.x }}, y {{ report.bbox.y }}, {{ report.bbox.width }} × {{ report.bbox.height }}{% else %}No face detected{% endif %}</td></tr>
+          {% if report.crop %}<tr><th>Crop</th><td>{% if crop_proposed %}x {{ report.crop.x }}, y {{ report.crop.y }}, {{ report.crop.width }} × {{ report.crop.height }}<br><span class="muted">{{ 'Valid after the crop' if report.crop.is_valid else 'Still not valid after the crop' }}</span>{% elif report.crop.status == 'not_possible' %}<span class="muted">Not possible: {{ report.crop.reason }}</span>{% else %}<span class="muted">Not needed: the framing is right</span>{% endif %}</td></tr>{% endif %}
+          <tr><th>Score</th><td>{{ fmt(report.overall_score) }} / 100</td></tr>
+        </table>
+      </section>
+      <section>
+        <h2>Rule map <span class="n">{{ report.rules | length }}</span></h2>
+        <div class="pad map">
+          {% for group in groups %}
+          <span class="group-name" title="{{ group.title }}">{{ group.title }}</span>
+          <span class="cells">{% for rule in group.rules %}<a class="cell" href="#rule-{{ rule.id }}" data-status="{{ rule.status }}" title="{{ rule.title }}: {{ statuses[rule.status].label }}" aria-label="{{ rule.title }}: {{ statuses[rule.status].label }}">{{ statuses[rule.status].letter }}</a>{% endfor %}</span>
+          {% endfor %}
+        </div>
+      </section>
+    </div>
+  </aside>
+
+  <main class="main">
+    {% if problems %}
+    <section id="to-fix">
+      <h2>To fix <span class="n">{{ problems | length }}</span></h2>
+      {{ attention(problems) }}
+    </section>
+    {% endif %}
+
+    {% if crop_proposed or (report.crop and report.crop.status == 'not_possible') %}
+    <section id="crop">
+      <h2>Crop to 35×45 {% if crop_proposed %}<span class="n">{{ report.crop.fixed_rules | length }} fixed</span>{% endif %}</h2>
+      {% if crop_proposed %}
+      <p class="lede">
+        Cropping to x {{ report.crop.x }}, y {{ report.crop.y }}, {{ report.crop.width }} × {{ report.crop.height }} px fixes
+        {{ report.crop.fixed_rules | length }} {{ 'rule' if report.crop.fixed_rules | length == 1 else 'rules' }}.
+        {% if report.crop.is_valid %}<strong>The cropped photo is valid.</strong>
+        {% else %}<strong>The cropped photo still fails {{ report.crop.remaining_rules | length }} {{ 'rule' if report.crop.remaining_rules | length == 1 else 'rules' }}</strong>; a crop can't fix {{ 'it' if report.crop.remaining_rules | length == 1 else 'them' }}, that needs a new photo.{% endif %}
+      </p>
+      <table class="data">
+        <colgroup><col class="c-st"><col class="c-rule"><col></colgroup>
+        <thead><tr><th>After</th><th>Rule</th><th>Now → after the crop</th></tr></thead>
+        <tbody>
+        {% for rule in crop_rows %}
+        <tr>
+          <td>{{ st(rule.after) }}</td>
+          <td><a href="#rule-{{ rule.id }}">{{ flat_title[rule.id] }}</a><span class="group">{{ group_titles[rule.group] }}</span></td>
+          <td class="change">{{ st(rule.status) }}<span class="to" aria-label="to">→</span>{{ st(rule.after) }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="lede">Not possible: {{ report.crop.reason }}</p>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    {% if skipped_rules %}
+    <section id="not-judged">
+      <h2>Not judged <span class="n">{{ skipped_rules | length }}</span></h2>
+      <p class="lede">No check could run on these rules, so the photo can't be valid.</p>
+      {{ attention(skipped_rules) }}
+    </section>
+    {% endif %}
+
+    <section id="rules">
+      <h2>All rules <span class="n">{{ report.rules | length }}</span></h2>
+      <div class="cols label" aria-hidden="true"><span>Status</span><span>Rule</span><span>Cover</span><span></span></div>
+      {% for group in groups %}
+      <h3 class="group-head"><span>{{ group.title }}</span><span class="muted">{{ group.rules | length }}</span></h3>
+      {% for rule in group.rules %}
+      {% set has_detail = rule.reasons or rule.check_results or rule.note %}
+      <details class="rule{% if not has_detail %} bare{% endif %}" id="rule-{{ rule.id }}" data-rule="{{ rule.id }}" data-status="{{ rule.status }}"{% if rule.status != 'pass' and has_detail %} open{% endif %}>
+        <summary>
+          {{ st(rule.status) }}
+          <span><span class="rule-title">{{ rule.title }}</span><span class="rule-id">{{ breakable(rule.id) }}</span></span>
+          <span class="cov">{% if coverage[rule.coverage] %}<abbr title="{{ coverage[rule.coverage].meaning }}">{{ coverage[rule.coverage].code }}</abbr>{% endif %}</span>
+          <span class="toggle" aria-hidden="true"></span>
+        </summary>
+        {% if has_detail %}
+        <div class="detail">
+          {# A rule's reasons come from its checks, so the checks table already shows them #}
+          {% if rule.reasons and not rule.check_results %}<ul class="reasons">{% for reason in rule.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}
+          {% if rule.check_results %}{{ checks_table(rule.check_results) }}{% endif %}
+          {% if rule.note %}<p class="note"><span class="label">How it is checked</span>{{ rule.note }}</p>{% endif %}
+        </div>
+        {% endif %}
+      </details>
+      {% endfor %}
+      {% endfor %}
+    </section>
+
+    {% if other_checks %}
+    <section id="other-checks">
+      <h2>Checks not tied to a rule <span class="n">{{ other_checks | length }}</span></h2>
+      <div class="pad">{{ checks_table(other_checks) }}</div>
+    </section>
+    {% endif %}
+
+    <section id="status-codes">
+      <h2>Status codes</h2>
+      <table class="legend">
+        {% for status in legend_order %}
+        <tr><td>{{ st(status) }}</td><td>{{ statuses[status].meaning }}</td></tr>
+        {% endfor %}
+      </table>
+    </section>
+  </main>
+</div>
+<script>
+  // Copy the embedded JSON answer to the clipboard; without this script only Download is offered
+  (() => {
+    const button = document.getElementById('copy-json');
+    const link = document.getElementById('download-json');
+    const status = document.getElementById('json-status');
+    let timer;
+
+    function show(state, label) {
+      clearTimeout(timer);
+      button.dataset.state = state;
+      button.textContent = status.textContent = label;
+      timer = setTimeout(() => { delete button.dataset.state; button.textContent = 'Copy JSON'; status.textContent = ''; }, 2000);
+    }
+
+    function copyByCommand(text) {
+      // Pages outside a secure origin (plain http on a LAN address) have no clipboard API
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.append(area);
+      area.select();
+      const copied = document.execCommand('copy');
+      area.remove();
+      if (!copied) throw new Error('copy command refused');
+    }
+
+    button.hidden = false;
+    button.addEventListener('click', async () => {
+      try {
+        const text = await (await fetch(link.href)).text();
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text);
+        } else {
+          copyByCommand(text);
+        }
+        show('done', 'Copied');
+      } catch (error) {
+        show('error', 'Copy failed, use Download');
+      }
+    });
+  })();
+</script>
+</body>
+</html>
