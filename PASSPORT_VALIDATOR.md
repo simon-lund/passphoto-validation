@@ -3,36 +3,12 @@
 ## Quick start
 
 ```bash
-uv sync --extra test
+./install.sh
 ```
 
-Most face checks come from **OFIQ**, the BSI's open-source implementation of ISO/IEC 29794-5 (face image quality), co-maintained by eu-LISA. It isn't on PyPI, so build it once next to this repo (needs cmake and about 15 minutes; its models, 430 MB, download from eu-LISA during the build):
+The script creates the Python environment with uv, builds **OFIQ** once next to this repo and writes its location to `.env`; the prerequisites, what it does step by step and its options are in the [README](README.md). OFIQ is the BSI's open-source implementation of ISO/IEC 29794-5 (face image quality), co-maintained by eu-LISA, and most face checks come from it. Without it the OFIQ checks report `skipped` with the reason, the rules they cover end as `skipped`, and no photo is valid.
 
-```bash
-git clone https://github.com/BSI-OFIQ/OFIQ-Project.git ../OFIQ-Project
-```
-
-```bash
-cd ../OFIQ-Project && python3 -m venv .conan-venv && .conan-venv/bin/pip install conan==2.18.1
-```
-
-```bash
-cd ../OFIQ-Project/scripts && CMAKE_POLICY_VERSION_MINIMUM=3.5 PATH=../.conan-venv/bin:$PATH bash build.sh --build-python
-```
-
-```bash
-uv pip install ../OFIQ-Project/install_x86_64_linux/Release/ofiq-1.2.0-py3-none-any.whl
-```
-
-Then set `OFIQ_CONFIG_DIR=../OFIQ-Project/data` (absolute path) wherever the validator runs. Without it the OFIQ checks report `skipped` with the reason, the rules they cover end as `skipped`, and no photo is valid. `CMAKE_POLICY_VERSION_MINIMUM` is only needed with cmake 4. OFIQ's conan profile installs missing system packages with sudo; set `tools.system.package_manager:mode=check` in `conan/conan_profile_release_linux.txt` to get a list instead.
-
-Optionally, **SigLIP** SO400M (Google, Apache 2.0) adds two warn-only second opinions on the eyes: reflections on glasses and gaze. It needs PyTorch (CPU) and a 3.3 GB model, which downloads from Hugging Face on first use (to `HF_HOME`, by default `~/.cache/huggingface`). `--inexact` keeps the hand-installed OFIQ wheel:
-
-```bash
-uv sync --extra test --extra siglip --inexact
-```
-
-Then set `SIGLIP_ENABLED=true` (and `SIGLIP_THREADS` when several validators run in parallel). It looks at the eyes OFIQ found, so it needs OFIQ too; without either, its checks report `skipped` with the reason. Loading takes about 25 s and 3.5 GB of memory; each photo takes about a second longer.
+Optionally, **SigLIP** SO400M (Google, Apache 2.0) adds two warn-only second opinions on the eyes: reflections on glasses and gaze (`./install.sh --siglip`). It needs PyTorch (CPU) and a 3.3 GB model, which downloads from Hugging Face on first use (to `HF_HOME`, by default `~/.cache/huggingface`). It looks at the eyes OFIQ found, so it needs OFIQ too; without either, its checks report `skipped` with the reason. Loading takes about 25 s and 3.5 GB of memory; each photo takes about a second longer. `SIGLIP_THREADS` limits its threads when several validators run in parallel.
 
 See the whole pipeline at work on the sample photos (per rule and per check, plus altered copies as sanity checks):
 
@@ -166,9 +142,7 @@ curl -F "file=@photo.jpg" -H "Accept: text/html" -o report.html http://127.0.0.1
 
 ## Installation
 
-```bash
-uv sync --extra test
-```
+`./install.sh`, see the [README](README.md).
 
 ## Usage Examples
 
@@ -416,7 +390,7 @@ pre-commit run --all-files
 
 ## Dependencies
 
-- **Core:** `opencv-python`, `mediapipe`, `numpy`, `pillow`; OFIQ (optional, built from source, see Quick start)
+- **Core:** `opencv-python`, `mediapipe`, `numpy`, `pillow`; OFIQ (optional, built from source by `install.sh`, see the README)
 - **CLI:** `typer[all]`, `rich`
 - **API:** `fastapi`, `uvicorn`, `python-multipart`
 
