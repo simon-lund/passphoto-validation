@@ -8,22 +8,26 @@ import csv
 import json
 import os
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
 import typer
+from openai import RateLimitError
 from rich.console import Console
 from rich.table import Table
 
 from . import request as req
 from .report import Thresholds, error_row, interpret, results_row
-from .rules import GROUPS, RULES
+from .rules import GATE_NAME, GROUPS, RULES
 
 app = typer.Typer(add_completion=False, help=__doc__, no_args_is_help=True)
 console = Console()
 
 PRICE_PER_MILLION_INPUT_TOKENS = 0.10  # USD, gpt-6-luna on /v1/decisions, uncached
+# A rate limit (HTTP 429) is waited out, not recorded: 5, 10, 20, 40 and 60 seconds, then the photo fails
+RATE_LIMIT_WAITS = (5, 10, 20, 40, 60)
 
 MODEL_OPTION = typer.Option(None, '--model', help='Decisions model (default: PASSPHOTO_MODEL or gpt-6-luna).')
 DETAIL_OPTION = typer.Option(req.DETAIL, '--detail', help='Image detail level: low, high, auto or original.')
@@ -118,14 +122,23 @@ def batch(
     if limit:
         rows = rows[:limit]
     out_path = set_dir / out
-    done = set()
+    kept, failed = [], []
     if out_path.exists():
         with open(out_path) as handle:
-            done = {json.loads(line)['file'] for line in handle if line.strip()}
+            earlier = [json.loads(line) for line in handle if line.strip()]
+        failed = [row for row in earlier if row['checks'][GATE_NAME]['status'] == 'error']
+        kept = [row for row in earlier if row['checks'][GATE_NAME]['status'] != 'error']
+        if failed:
+            # Their photos are sent again: the file keeps only the answered ones
+            with open(out_path, 'w') as handle:
+                for row in kept:
+                    handle.write(json.dumps(row) + '\n')
+    done = {row['file'] for row in kept}
     todo = [row for row in rows if row['file'] not in done]
 
     console.print(f'{len(todo)} of {len(rows)} photos from {set_dir} still to send to OpenAI ({_model(model)}); '
-                  f'results go to {out_path}' + (f'; {len(done)} already there' if done else ''))
+                  f'results go to {out_path}' + (f'; {len(done)} already there' if done else '')
+                  + (f'; {len(failed)} failed last time and are sent again' if failed else ''))
     if not todo:
         return
     if not yes:
@@ -138,7 +151,15 @@ def batch(
     def run(row):
         try:
             loaded = req.load_photo(set_dir / row['file'], max_side)
-            decision = req.send(client, req.build_request(loaded, _model(model), detail))
+            request = req.build_request(loaded, _model(model), detail)
+            for wait in (*RATE_LIMIT_WAITS, None):
+                try:
+                    decision = req.send(client, request)
+                    break
+                except RateLimitError:
+                    if wait is None:
+                        raise
+                    time.sleep(wait)
             return results_row(interpret(decision, loaded, thresholds), row)
         except Exception as exc:  # noqa: BLE001 - the row records the failure, the batch goes on
             return error_row(row, f'{type(exc).__name__}: {exc}')
@@ -154,7 +175,7 @@ def batch(
                 console.print(f'{index}/{len(todo)}  {tokens} input tokens so far, about ${_cost(tokens):.2f}')
     console.print(f'Done: {len(todo)} photos, {errors} failed requests, {tokens} input tokens (about ${_cost(tokens):.2f}) -> {out_path}')
     if errors:
-        console.print('Failed photos have an error on face_detected; run again to retry them after deleting their lines.')
+        console.print('Failed photos have an error on face_detected; run the same command again to send them again.')
 
 
 @app.command()

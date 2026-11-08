@@ -42,7 +42,7 @@ Options on `check` and `batch`: `--warn-at` and `--fail-at` (the thresholds on t
 
 ## Evaluate a set
 
-`batch` sends every photo of an evaluation set built by passphoto-validation's `scripts/build_eval_set.py` (a folder with `manifest.csv`) and writes `results_decisions.jsonl` next to it, in the shape its `scripts/run_eval.py` writes: the manifest row, `checks` (the gate as `face_detected`, each rule once more as a check whose measurement is the probability) and `rules` (rule id to status). Photos already in the output are skipped, so an interrupted run continues where it stopped; a failed request becomes a row with an `error` on `face_detected` and every rule `skipped`.
+`batch` sends every photo of an evaluation set built by passphoto-validation's `scripts/build_eval_set.py` (a folder with `manifest.csv`) and writes `results_decisions.jsonl` next to it, in the shape its `scripts/run_eval.py` writes: the manifest row, `checks` (the gate as `face_detected`, each rule once more as a check whose measurement is the probability) and `rules` (rule id to status). Photos already in the output are skipped, so an interrupted run continues where it stopped. A rate limit (HTTP 429) is waited out, up to about two minutes per photo; a request that still fails becomes a row with an `error` on `face_detected` and every rule `skipped`, and the next run sends that photo again. Four parallel requests stay under the usual per-minute token limit; eight did not.
 
 ```bash
 uv run passphoto-decisions batch ../datasets/frl-london-eval --yes

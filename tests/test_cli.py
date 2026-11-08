@@ -106,6 +106,53 @@ def test_a_failing_request_becomes_an_error_row(tmp_path, monkeypatch):
     assert '1 failed requests' in result.output
 
 
+def test_failed_photos_are_sent_again_on_the_next_run(tmp_path, fake_client):
+    _write_set(tmp_path, ['001_compliant.jpg', '002_compliant.jpg'])
+    good = json.dumps({'file': '001_compliant.jpg', 'identity': '001', 'split': 'calibrate', 'variant': 'compliant',
+                       'broken_rule': '', 'checks': {GATE_NAME: {'status': 'pass', 'reasons': [], 'measurements': {}}},
+                       'rules': {}, 'usage': {'input_tokens': 7}})
+    failed = json.dumps({'file': '002_compliant.jpg', 'identity': '002', 'split': 'calibrate', 'variant': 'compliant',
+                         'broken_rule': '', 'checks': {GATE_NAME: {'status': 'error', 'reasons': ['RateLimitError: 429'], 'measurements': {}}},
+                         'rules': {}, 'usage': {}})
+    (tmp_path / 'results_decisions.jsonl').write_text(good + '\n' + failed + '\n')
+
+    result = runner.invoke(cli.app, ['batch', str(tmp_path), '--yes', '--workers', '1'])
+    assert result.exit_code == 0, result.output
+    assert '1 of 2 photos' in result.output and '1 failed last time and are sent again' in result.output
+    rows = [json.loads(line) for line in (tmp_path / 'results_decisions.jsonl').read_text().splitlines()]
+    assert [row['file'] for row in rows] == ['001_compliant.jpg', '002_compliant.jpg']
+    assert rows[0]['usage'] == {'input_tokens': 7}, 'the answered row is kept as it was'
+    assert rows[1]['checks'][GATE_NAME]['status'] == 'pass'
+    assert [request['input'][1]['content'][0]['text'] for request in fake_client.decisions.requests] == ['The photo is 700x900 pixels.']
+
+
+def test_rate_limits_are_waited_out(tmp_path, monkeypatch):
+    import httpx2 as httpx  # the SDK's HTTP library
+    from openai import RateLimitError
+
+    class Limited:
+        calls = 0
+
+        class decisions:  # noqa: N801 - mirrors the SDK's attribute
+            @staticmethod
+            def create(**kwargs):
+                Limited.calls += 1
+                if Limited.calls <= 2:
+                    response = httpx.Response(429, request=httpx.Request('POST', 'https://api.openai.com/v1/decisions'))
+                    raise RateLimitError('Rate limit reached', response=response, body=None)
+                return make_decision()
+    waits = []
+    monkeypatch.setattr(cli, 'make_client', lambda: Limited())
+    monkeypatch.setattr(cli.time, 'sleep', waits.append)
+    _write_set(tmp_path, ['001_compliant.jpg'])
+    result = runner.invoke(cli.app, ['batch', str(tmp_path), '--yes', '--workers', '1'])
+    assert result.exit_code == 0, result.output
+    assert Limited.calls == 3 and waits == [5, 10]
+    row = json.loads((tmp_path / 'results_decisions.jsonl').read_text())
+    assert row['checks'][GATE_NAME]['status'] == 'pass'
+    assert '0 failed requests' in result.output
+
+
 def test_an_api_error_on_check_is_one_line_not_a_traceback(photo_file, monkeypatch):
     from openai import OpenAIError
 
