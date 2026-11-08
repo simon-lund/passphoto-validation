@@ -15,6 +15,7 @@ from .crop import FRAMING_CHECKS, plan_crop
 from .models import CheckResult, CheckSkipped, Crop, PassportPhotoReport, ValidationIssue, ValidationContext
 from .ofiq import load_engine
 from .rules import evaluate_rules
+from .thresholds import thresholds
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +133,9 @@ class PassportPhotoValidator:
     def _checks(self) -> List[Tuple[str, Callable, Dict]]:
         """All checks that run once exactly one face is found, as (name, function, keyword arguments).
 
-        The names are part of the API contract (rules refer to them): add new ones, never rename.
+        The names are part of the API contract (rules refer to them): add new ones, never rename. The
+        thresholds come from core/thresholds.py, which also says where each number came from; a check
+        without an entry there runs with its function's defaults.
         """
         distortion = dict(
             error_threshold=self.config.distortion_error_threshold,
@@ -144,68 +147,60 @@ class PassportPhotoValidator:
             ('photo_format', geometry.check_photo_format, {}),
             ('face_size', geometry.check_face_size, {}),
             ('face_centered', geometry.check_face_centered, {}),
-            ('face_sharpness', quality.check_face_sharpness, dict(warn_below=0.14, fail_below=0.11)),
-            ('compression', quality.check_compression_blocks, dict(warn_above=1.6, fail_above=2.5)),
-            ('exposure', lighting.check_exposure_level, dict(warn_below=75, fail_below=60)),
+            ('face_sharpness', quality.check_face_sharpness, thresholds('face_sharpness')),
+            ('compression', quality.check_compression_blocks, thresholds('compression')),
+            ('exposure', lighting.check_exposure_level, thresholds('exposure')),
             ('contrast', lighting.check_contrast, {}),
-            # Fails on dark backgrounds, warns on mid-tones: every Open Images background labelled dark is below 80,
-            # none labelled light; the London Set's plain backgrounds are all above 190
-            ('background_brightness', background.check_background_brightness, dict(min_brightness=120, fail_below=80)),
+            ('background_brightness', background.check_background_brightness, thresholds('background_brightness')),
             ('background_uniformity', background.check_background_uniformity, {}),
             ('background_consistency', background.check_background_consistency, {}),
-            # The London Set's plain backgrounds stay below 7 at 1063 px height (below 14 at 800 px); the faint UN
-            # flag in Open Images measures 34 (background labels: openimages-faces/eval/vlm_background_labels.jsonl)
-            ('background_pattern', background.check_background_pattern, dict(warn_above=10, fail_above=20)),
-            # Calibrated on the London Set's compliant crops and synthetic defects built from them
-            # (scripts/build_eval_set.py: bg_gradient, bg_shadow, ink_stain, smoothed). Compliant crops reach a
-            # gradient of 16, a shadow depth of 9 (one photo; 98% stay under 5) and 2 marks; the defects start
-            # at 41, 3 (90% above 5) and 3 marks. Filtered skin stays under 0.14, natural skin above 0.19
-            ('background_gradient', background.check_background_gradient, dict(warn_above=18, fail_above=30)),
-            ('background_shadow', background.check_background_shadow, dict(warn_above=5, fail_above=9)),
-            ('print_defects', quality.check_print_defects, dict(fail_at=3)),
-            ('skin_smoothing', retouching.check_skin_smoothing, dict(warn_below=0.15)),
+            ('background_pattern', background.check_background_pattern, thresholds('background_pattern')),
+            ('background_gradient', background.check_background_gradient, thresholds('background_gradient')),
+            ('background_shadow', background.check_background_shadow, thresholds('background_shadow')),
+            ('print_defects', quality.check_print_defects, thresholds('print_defects')),
+            ('skin_smoothing', retouching.check_skin_smoothing, thresholds('skin_smoothing')),
             ('glare', features.check_glasses, {}),
             *self._ofiq_checks(),
-            ('gaze', eyes.check_gaze, dict(warn_above=0.08, fail_above=0.15)),
-            ('red_eyes', eyes.check_red_eyes, dict(fail_above=0.3)),
-            ('glasses_tint', eyes.check_glasses_tint, dict(min_glasses_share=0.03, warn_below=0.55, fail_below=0.45)),
-            ('glasses_glare', eyes.check_glasses_glare, dict(min_glasses_share=0.03, warn_above=0.01, fail_above=0.04)),
-            # Second opinions, warn only. Thresholds for SigLIP SO400M: the score 80% of fine photos stay under,
-            # on the calibrate half of the Open Images set (notebooks/real_photos.ipynb)
-            ('siglip_glasses_glare', eyes.check_glasses_glare_siglip, dict(min_glasses_share=0.03, warn_above=-1.12)),
-            ('siglip_gaze', eyes.check_gaze_siglip, dict(warn_above=-0.33)),
+            ('gaze', eyes.check_gaze, thresholds('gaze')),
+            ('red_eyes', eyes.check_red_eyes, thresholds('red_eyes')),
+            ('glasses_tint', eyes.check_glasses_tint, thresholds('glasses_tint')),
+            ('glasses_glare', eyes.check_glasses_glare, thresholds('glasses_glare')),
+            # Second opinions, warn only
+            ('siglip_glasses_glare', eyes.check_glasses_glare_siglip, thresholds('siglip_glasses_glare')),
+            ('siglip_gaze', eyes.check_gaze_siglip, thresholds('siglip_gaze')),
         ]
 
     @staticmethod
     def _ofiq_checks() -> List[Tuple[str, Callable, Dict]]:
-        """The OFIQ checks. Quality thresholds are on OFIQ's 0-100 scale; pose thresholds in degrees.
+        """The OFIQ checks. Quality thresholds are on OFIQ's 0-100 scale; pose thresholds in degrees
+        (core/thresholds.py).
 
-        Calibrated on the London Set (notebooks/evaluation.ipynb); the eye thresholds also on real photos with
-        glasses, hats and closed eyes from Open Images (scripts/score_labels.py). Not used, because they failed
-        there: UnderExposurePrevention (scores well-lit dark skin as underexposed), Sharpness (drops from
-        84 to 38 when a photo is shrunk by 3%), CompressionArtifacts (blind to JPEG quality 4 at ID-photo
-        resolution) and DynamicRange (doesn't separate low-contrast photos).
+        Not used, because they failed on the evaluation set: UnderExposurePrevention (scores well-lit dark
+        skin as underexposed), Sharpness (drops from 84 to 38 when a photo is shrunk by 3%),
+        CompressionArtifacts (blind to JPEG quality 4 at ID-photo resolution) and DynamicRange (doesn't
+        separate low-contrast photos).
         """
-        def quality(measure_name, problem, warn_below, fail_below):
-            return ofiq_checks.check_quality, dict(
-                measure_name=measure_name, problem=problem, warn_below=warn_below, fail_below=fail_below)
+        def pose(name, axis):
+            return name, ofiq_checks.check_pose, dict(axis=axis, **thresholds(name))
+
+        def quality(name, measure_name, problem):
+            return name, ofiq_checks.check_quality, dict(measure_name=measure_name, problem=problem, **thresholds(name))
 
         return [
-            ('ofiq_head_yaw', ofiq_checks.check_pose, dict(axis='yaw', warn_above=5, fail_above=10)),
-            ('ofiq_head_pitch', ofiq_checks.check_pose, dict(axis='pitch', warn_above=8, fail_above=12)),
-            ('ofiq_head_roll', ofiq_checks.check_pose, dict(axis='roll', warn_above=6, fail_above=8)),
-            ('ofiq_expression', *quality('ExpressionNeutrality', 'Expression is not neutral', 85, 50)),
-            # The London Set's closed mouths never score below 94; 7 in 10 real open mouths score below 90
-            ('ofiq_mouth_closed', *quality('MouthClosed', 'Mouth is open', 93, 90)),
-            ('ofiq_eyes_open', *quality('EyesOpen', 'Eyes are not fully open', 95, 70)),
-            ('ofiq_eyes_visible', *quality('EyesVisible', 'Eyes are covered (hair, frame or tinted lenses)', 60, 25)),
-            ('ofiq_face_occlusion', *quality('FaceOcclusionPrevention', 'Part of the face is covered', 90, 70)),
-            ('ofiq_mouth_occlusion', *quality('MouthOcclusionPrevention', 'The mouth is covered', 90, 70)),
-            ('ofiq_head_covering', *quality('NoHeadCoverings', 'Head covering detected', 90, 50)),
-            ('ofiq_background', *quality('BackgroundUniformity', 'Background is not uniform', 40, 25)),
-            ('ofiq_illumination', *quality('IlluminationUniformity', 'Face is unevenly lit (shadows)', 72, 60)),
-            ('ofiq_overexposure', *quality('OverExposurePrevention', 'Face is overexposed', 90, 50)),
-            ('ofiq_natural_colour', *quality('NaturalColour', 'Colours look unnatural (colour cast)', 80, 50)),
+            pose('ofiq_head_yaw', 'yaw'),
+            pose('ofiq_head_pitch', 'pitch'),
+            pose('ofiq_head_roll', 'roll'),
+            quality('ofiq_expression', 'ExpressionNeutrality', 'Expression is not neutral'),
+            quality('ofiq_mouth_closed', 'MouthClosed', 'Mouth is open'),
+            quality('ofiq_eyes_open', 'EyesOpen', 'Eyes are not fully open'),
+            quality('ofiq_eyes_visible', 'EyesVisible', 'Eyes are covered (hair, frame or tinted lenses)'),
+            quality('ofiq_face_occlusion', 'FaceOcclusionPrevention', 'Part of the face is covered'),
+            quality('ofiq_mouth_occlusion', 'MouthOcclusionPrevention', 'The mouth is covered'),
+            quality('ofiq_head_covering', 'NoHeadCoverings', 'Head covering detected'),
+            quality('ofiq_background', 'BackgroundUniformity', 'Background is not uniform'),
+            quality('ofiq_illumination', 'IlluminationUniformity', 'Face is unevenly lit (shadows)'),
+            quality('ofiq_overexposure', 'OverExposurePrevention', 'Face is overexposed'),
+            quality('ofiq_natural_colour', 'NaturalColour', 'Colours look unnatural (colour cast)'),
         ]
 
     def check_names(self) -> List[str]:

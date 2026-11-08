@@ -227,6 +227,8 @@ print(f"Score: {report['overall_score']}")
 
 ## Validation Checks
 
+The warn and fail thresholds of every check live in one table, `core/thresholds.py`, with a note on where each number came from; the validator reads it when it registers its checks, and `notebooks/evaluation.ipynb` draws the same numbers as the warn and fail lines of its panels. To change a threshold, edit it there, update the snapshot in `tests/test_thresholds.py` (it pins the table, so a change is deliberate) and re-run the notebook to see the effect. Checks without an entry run with the defaults of their function; `resolution` takes its minimums from `ValidatorConfig`.
+
 The validator runs 37 checks (`PassportPhotoValidator.check_names()`). Each ends as `pass`, `warn`, `fail`, `skipped` (it couldn't judge the photo, e.g. no face, or OFIQ isn't installed) or `error` (it crashed, which is a bug).
 
 The German ID photo rules (Fotomustertafel) are listed in `core/rules.py`: 36 rules, each mapped to the checks that cover it. A rule takes the worst status of its checks that ran; a rule no check covers is `not_checked`, never a pass. A rule none of whose checks could run (OFIQ missing, no face landmarks) is `skipped`, and so is a rule one of whose checks crashed while none failed: a passing check doesn't make up for one whose verdict is missing.
