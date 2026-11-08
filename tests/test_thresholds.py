@@ -18,7 +18,7 @@ def test_every_table_entry_is_what_its_check_runs_with():
 
 
 def test_every_threshold_the_validator_passes_is_in_the_table():
-    threshold_keys = ('warn_', 'fail_', 'min_', 'chroma_')
+    threshold_keys = ('warn_', 'fail_', 'min_', 'chroma_', 'rim_')
     for name, kwargs in _registered().items():
         passed = {key for key in kwargs if key.startswith(threshold_keys)}
         if name == 'resolution':  # its minimums come from ValidatorConfig
@@ -35,7 +35,7 @@ def test_the_table_is_pinned():
         'background_brightness': dict(min_brightness=120, fail_below=80),
         'background_pattern': dict(warn_above=10, fail_above=20),
         'background_gradient': dict(warn_above=18, fail_above=30),
-        'background_shadow': dict(warn_above=5, fail_above=9),
+        'background_shadow': dict(warn_above=5, fail_above=9, rim_confidence=0.85, rim_texture=3.0),
         'print_defects': dict(fail_at=3),
         'skin_smoothing': dict(warn_below=0.15, warn_gradient_ratio_below=0.115),
         'skin_colour_patches': dict(warn_share_above=0.02, chroma_distance=30),

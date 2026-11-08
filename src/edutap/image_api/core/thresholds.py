@@ -47,10 +47,12 @@ THRESHOLDS: Dict[str, Thresholds] = {
         dict(warn_above=18, fail_above=30),
         'L* change across a plane fitted to the background; compliant crops reach 16, the gradient variant starts at 41'),
     'background_shadow': Thresholds(
-        dict(warn_above=5, fail_above=9),
+        dict(warn_above=5, fail_above=9, rim_confidence=0.85, rim_texture=3.0),
         'L* the band next to the person is darker than that plane; compliant crops reach 9 (one photo; 98% stay '
-        'under 5), the shadow variant starts at 3 (90% above 5). The margin is thin. The misses are shadows the '
-        'segmentation swallowed into the person mask, not a threshold matter; a tighter mask fails good crops'),
+        'under 5), the shadow variant starts at 3 (90% above 5): the rest of the shadow is swallowed into the '
+        'person mask. The rim of the mask (loose 0.5 against tight 0.85) read on smooth backdrop-like pixels '
+        '(lightness deviation under 3) measures 28 and more on every shadow variant and at most 4.7 on compliant, '
+        'glasses and rotated crops; a texture cap of 5 would let good crops reach 7.3'),
     'print_defects': Thresholds(
         dict(fail_at=3),
         'Marks on the background; any mark warns, three fail. Compliant crops show up to 2 (stray hair), the ink '

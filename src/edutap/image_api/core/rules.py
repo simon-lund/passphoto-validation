@@ -78,8 +78,9 @@ RULES: List[Rule] = [
     # Background
     Rule('background_no_shadows', 'background', 'No shadows on the background',
          ('background_shadow',), 'full',
-         'How much darker the background next to the person is than farther away. A darkening across the '
-         'whole photo counts as a gradient (no_color_gradients) instead.'),
+         'How much darker the background next to the person is than farther away, read in the band around the '
+         'person and in the rim of the person mask, where the segmentation hides a shadow that touches the '
+         'person. A darkening across the whole photo counts as a gradient (no_color_gradients) instead.'),
     Rule('background_no_objects', 'background', 'No objects in the background',
          ('background_uniformity', 'ofiq_background'), 'full'),
     Rule('background_plain', 'background', 'No patterned background (e.g. wallpaper)',

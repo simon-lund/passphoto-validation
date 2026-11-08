@@ -555,9 +555,42 @@ def check_background_gradient(context: ValidationContext, warn_above: float, fai
             message=f'The background is lighter on one side than the other (by {span:.0f} L* across the photo).'))
 
 
-def check_background_shadow(context: ValidationContext, warn_above: float, fail_above: float):
-    """Check for a shadow cast on the background next to the person: how much darker the band around the
-    person is than the background farther away, in L* (0-100).
+def _rim_shadow_depth(context: ValidationContext, plane: np.ndarray, residual: np.ndarray, distance: np.ndarray,
+                      band: int, sides, confidence: float, texture: float, chroma_tolerance: float = 8.0) -> float:
+    """How much darker than the plane the backdrop is in the rim of the person mask, in L*.
+
+    A cast shadow that touches the person is often taken for part of the person by the selfie segmentation,
+    so the band outside the mask is clean and the shadow hides in the rim: the pixels the loose mask (above
+    0.5) includes and a tight one (above `confidence`) does not, plus the first band outside the loose mask.
+    Hair and clothing sit in that rim too, so only pixels that look like the backdrop count: within
+    `chroma_tolerance` CIELAB units of the background's chroma, with a local lightness deviation under
+    `texture` (a shadow is smooth, hair and folds are not), and no darker than half the plane (a black collar
+    is). The depth is the 25th percentile of those pixels' residual on the darker side; 0 when fewer than
+    100 such pixels are found on either side.
+    """
+    segmentation = context.segmentation_mask
+    if segmentation is None:
+        return 0.0
+    loose = context.person_mask_binary.astype(bool)
+    rim = (loose & ~(segmentation > confidence)) | ((distance > 0) & (distance <= 1))
+    lab = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2LAB).astype(np.float32)
+    chroma = lab[..., 1:] - 128
+    far = distance > 3
+    reference = np.median(chroma[far].reshape(-1, 2), axis=0)
+    backdrop_like = np.linalg.norm(chroma - reference, axis=2) < chroma_tolerance
+    lightness = lab[..., 0] * (100 / 255)
+    window = max(3, int(band // 2) | 1)
+    mean = cv2.blur(lightness, (window, window))
+    deviation = np.sqrt(np.maximum(cv2.blur(lightness * lightness, (window, window)) - mean * mean, 0))
+    smooth = rim & backdrop_like & (deviation < texture) & (residual > -0.5 * plane)
+    depths = [-np.percentile(residual[smooth & side], 25) for side in sides if (smooth & side).sum() >= 100]
+    return float(max(depths)) if depths else 0.0
+
+
+def check_background_shadow(context: ValidationContext, warn_above: float, fail_above: float,
+                            rim_confidence: float = 0.85, rim_texture: float = 3.0):
+    """Check for a shadow cast on the background next to the person: how much darker the background around
+    the person is than the background farther away, in L* (0-100).
 
     The band runs from one to three bands (3-9% of the short side) from the person. A plane fitted to the
     background beyond it gives the expected lightness, so a gradient across the whole photo doesn't count
@@ -565,10 +598,17 @@ def check_background_shadow(context: ValidationContext, warn_above: float, fail_
     separately: `background_shadow_depth` is how far the darkest quarter of the darker side falls below
     the plane. Plain backdrops stay below 6 (London Set).
 
+    The selfie segmentation often takes a shadow that touches the person for part of the person; the band
+    is then clean and the shadow hides in the mask's rim. `background_shadow_rim_depth` measures the rim
+    (see _rim_shadow_depth), counting only pixels that look like a darkened backdrop. The verdict follows
+    the deeper of the two.
+
     :param warn_above: Depth in L* above which it warns.
     :param fail_above: Depth above which it fails.
+    :param rim_confidence: Segmentation confidence of the tight mask whose rim is searched.
+    :param rim_texture: Local lightness deviation (L*) under which a rim pixel counts as smooth backdrop.
     """
-    lightness, distance, _ = _background_lightness(context)
+    lightness, distance, band = _background_lightness(context)
     near = (distance > 1) & (distance <= 3)
     fit = _fit_plane(lightness, distance > 3, trim=6) if near.sum() >= 200 else None
     if fit is None:
@@ -579,16 +619,20 @@ def check_background_shadow(context: ValidationContext, warn_above: float, fail_
     bbox = context.face_data.get('bbox')
     centre_x = bbox['x'] + bbox['width'] / 2 if bbox else context.width / 2
     columns = np.arange(context.width)[None, :]
+    sides = (columns < centre_x, columns >= centre_x)
     depths = []
-    for side in (columns < centre_x, columns >= centre_x):
+    for side in sides:
         pixels = residual[near & side]
         if len(pixels) >= 100:
             depths.append(-np.percentile(pixels, 25))
     if not depths:
         raise CheckSkipped('Too little background around the person to look for shadows.')
-    depth = float(max(depths))
-    context.measurements['background_shadow_depth'] = depth
+    band_depth = float(max(depths))
+    rim_depth = _rim_shadow_depth(context, plane, residual, distance, band, sides, rim_confidence, rim_texture)
+    context.measurements['background_shadow_depth'] = band_depth
+    context.measurements['background_shadow_rim_depth'] = rim_depth
     context.measurements['background_shadow_share'] = float((residual[near] < -4).mean())
+    depth = max(band_depth, rim_depth)
 
     if depth > fail_above:
         context.issues.append(ValidationIssue(

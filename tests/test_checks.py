@@ -111,6 +111,24 @@ def test_shadow_next_to_the_person_fails_background_shadow(validator, photo):
     assert statuses['background_gradient'] == 'pass'
 
 
+def test_shadow_hugging_the_person_is_found_in_the_rim_of_the_mask(validator, photo):
+    # A narrow shadow right next to the person lies within the band the check leaves out around the
+    # segmentation's edge (or inside the mask, when the segmentation takes it for part of the person);
+    # the rim measurement finds it where the band measurement cannot
+    h, w = photo.shape[:2]
+    person = ~_background(photo)
+    shifted = np.zeros_like(person)
+    shifted[int(h * 0.01):, int(w * 0.03):] = person[:h - int(h * 0.01), :w - int(w * 0.03)]
+    shade = cv2.GaussianBlur((shifted & ~person).astype(np.float32), (0, 0), w * 0.01)
+    shadowed = np.clip(photo * (1 - 0.4 * shade)[..., None], 0, 255).astype(np.uint8)
+    report = validator(shadowed, crop=False)
+    assert report.measurements['background_shadow_depth'] < 5
+    assert report.measurements['background_shadow_rim_depth'] > 9
+    assert {check.name: check.status for check in report.checks}['background_shadow'] == 'fail'
+    # The plain photo's rim is just as quiet as its band
+    assert validator(photo, crop=False).measurements['background_shadow_rim_depth'] < 5
+
+
 def test_background_running_light_to_dark_fails_background_gradient(validator, photo):
     # The background (L* 59) darkens to 30% from left to right: a change of about 40 L*
     factor = np.where(_background(photo), np.linspace(1.0, 0.3, photo.shape[1], dtype=np.float32)[None, :], 1.0)
