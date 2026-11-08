@@ -69,7 +69,13 @@ def check(
         print(json.dumps(req.redacted(request), indent=2))
         return
 
-    decision = req.send(make_client(), request)
+    from openai import OpenAIError
+    try:
+        decision = req.send(make_client(), request)
+    except OpenAIError as exc:
+        # One line, not a traceback: the API's own message says what to do (credits, key, rate limit)
+        console.print(f'[red]The API did not answer:[/] {exc}')
+        raise typer.Exit(code=1)
     report = interpret(decision, loaded, Thresholds(warn_at, fail_at))
     if json_out:
         print(json.dumps(report.to_dict(), indent=2))

@@ -106,6 +106,21 @@ def test_a_failing_request_becomes_an_error_row(tmp_path, monkeypatch):
     assert '1 failed requests' in result.output
 
 
+def test_an_api_error_on_check_is_one_line_not_a_traceback(photo_file, monkeypatch):
+    from openai import OpenAIError
+
+    class Refusing:
+        class decisions:  # noqa: N801 - mirrors the SDK's attribute
+            @staticmethod
+            def create(**kwargs):
+                raise OpenAIError('Error code: 429 - You have no credits remaining.')
+    monkeypatch.setattr(cli, 'make_client', lambda: Refusing())
+    result = runner.invoke(cli.app, ['check', str(photo_file)])
+    assert result.exit_code == 1
+    assert 'The API did not answer' in result.output and 'no credits remaining' in result.output
+    assert 'Traceback' not in result.output
+
+
 def test_rules_lists_the_catalogue():
     result = runner.invoke(cli.app, ['rules'])
     assert result.exit_code == 0
