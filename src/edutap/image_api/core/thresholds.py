@@ -55,9 +55,17 @@ THRESHOLDS: Dict[str, Thresholds] = {
         'Marks on the background; any mark warns, three fail. Compliant crops show up to 2 (stray hair), the ink '
         'variant 3 or more'),
     'skin_smoothing': Thresholds(
-        dict(warn_below=0.15),
+        dict(warn_below=0.15, warn_gradient_ratio_below=0.115),
         'Cheek and forehead texture over eye texture at 192 px face width; filtered skin stays under 0.14, '
-        'natural skin above 0.19. Warns only'),
+        'natural skin above 0.19. Skin texture over the median gradient of the face, for a filter that smooths '
+        'the eyes too: compliant, glasses, cast, shadow, dark and low-contrast crops stay above 0.125, the '
+        'whole-face smoothed variant under 0.11 (smoothed_all). Warns only'),
+    'skin_colour_patches': Thresholds(
+        dict(warn_share_above=0.02, chroma_distance=30),
+        'Patches of the lower face more than 30 CIELAB chroma units from the skin, at least as saturated: 0 on '
+        'every London crop (plain, glasses, sunglasses, cast, shadow), 3-4% of the face oval with the sticker '
+        'variant (face_stickers); 2% of real candid photos warn (mirrored goggles, a clown nose, a glass or fruit '
+        'at the mouth). Warns only'),
     # Eyes
     'gaze': Thresholds(
         dict(warn_above=0.08, fail_above=0.15),

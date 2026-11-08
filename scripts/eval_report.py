@@ -43,6 +43,8 @@ TARGETS = {
     'bg_gradient': ['background_gradient'],
     'ink_stain': ['print_defects'],
     'smoothed': ['skin_smoothing'],
+    'smoothed_all': ['skin_smoothing'],
+    'face_stickers': ['skin_colour_patches'],
 }
 
 

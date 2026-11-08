@@ -159,6 +159,7 @@ class PassportPhotoValidator:
             ('background_shadow', background.check_background_shadow, thresholds('background_shadow')),
             ('print_defects', quality.check_print_defects, thresholds('print_defects')),
             ('skin_smoothing', retouching.check_skin_smoothing, thresholds('skin_smoothing')),
+            ('skin_colour_patches', retouching.check_skin_colour_patches, thresholds('skin_colour_patches')),
             ('glare', features.check_glasses, {}),
             *self._ofiq_checks(),
             ('gaze', eyes.check_gaze, thresholds('gaze')),

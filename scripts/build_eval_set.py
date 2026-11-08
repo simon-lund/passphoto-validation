@@ -54,6 +54,8 @@ SYNTHETIC_VARIANTS = {
     'bg_gradient': 'no_color_gradients',
     'ink_stain': 'no_print_errors',
     'smoothed': 'no_retouching',
+    'face_stickers': 'no_retouching',
+    'smoothed_all': 'no_retouching',
 }
 
 _CHIN, _FOREHEAD, _NOSE = 152, 10, 1
@@ -244,6 +246,32 @@ def smoothed(image: np.ndarray, geometry: Geometry) -> np.ndarray:
     return (image * (1 - alpha) + smooth * alpha).astype(np.uint8)
 
 
+def smoothed_all(image: np.ndarray, geometry: Geometry) -> np.ndarray:
+    """The whole face flattened by an edge-preserving filter, eyes and mouth included, as a whole-face beauty
+    filter does; the edges stay, the skin texture goes."""
+    w = image.shape[1]
+    face = _hull(image.shape, geometry.points, mp.solutions.face_mesh.FACEMESH_FACE_OVAL, max(1, int(w * 0.04)))
+    alpha = cv2.GaussianBlur(face.astype(np.float32), (0, 0), w * 0.01)[..., None]
+    smooth = cv2.edgePreservingFilter(image, flags=cv2.RECURS_FILTER, sigma_s=40, sigma_r=0.25)
+    return (image * (1 - alpha) + smooth * alpha).astype(np.uint8)
+
+
+def face_stickers(image: np.ndarray, geometry: Geometry) -> np.ndarray:
+    """Coloured stickers on the face, as a face filter paints them: a pink nose and a butterfly on each cheek."""
+    out = image.copy()
+    face_width = float(np.linalg.norm(geometry.points[234] - geometry.points[454]))
+    nose = tuple(int(v) for v in geometry.points[_NOSE])
+    radius = int(face_width * 0.08)
+    cv2.ellipse(out, nose, (radius, int(radius * 0.7)), 0, 0, 360, (160, 120, 240), -1, cv2.LINE_AA)
+    for cheek, colour in ((50, (200, 80, 255)), (280, (255, 160, 0))):
+        cx, cy = (int(v) for v in geometry.points[cheek])
+        size = int(face_width * 0.07)
+        for side in (-1, 1):
+            cv2.ellipse(out, (cx + side * size // 2, cy), (size // 2, int(size * 0.7)), side * 25, 0, 360, colour, -1, cv2.LINE_AA)
+        cv2.line(out, (cx, cy - int(size * 0.7)), (cx, cy + int(size * 0.7)), (40, 40, 40), max(2, size // 12), cv2.LINE_AA)
+    return out
+
+
 def synthetic(variant: str, base: np.ndarray, geometry: Geometry, source: np.ndarray, source_geometry: Geometry):
     if variant == 'roll_4':
         return rotate(base, geometry.eye_centre(), 4)
@@ -290,6 +318,10 @@ def synthetic(variant: str, base: np.ndarray, geometry: Geometry, source: np.nda
         return ink_stain(base, geometry)
     if variant == 'smoothed':
         return smoothed(base, geometry)
+    if variant == 'smoothed_all':
+        return smoothed_all(base, geometry)
+    if variant == 'face_stickers':
+        return face_stickers(base, geometry)
     raise ValueError(variant)
 
 

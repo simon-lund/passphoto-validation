@@ -153,10 +153,13 @@ RULES: List[Rule] = [
 
     # Retouching
     Rule('no_retouching', 'retouching', 'Not retouched or filtered (e.g. Snapchat filters)',
-         ('skin_smoothing',), 'partial',
+         ('skin_smoothing', 'skin_colour_patches'), 'partial',
          'Skin smoothing, as beauty filters do: the cheeks and forehead lose their texture while the eyes stay '
-         'sharp. Warning only, calibrated on synthetic smoothing. Other edits (a swapped background, stickers, '
-         'reshaped features) are not detected.'),
+         'sharp, or the whole face loses it while its edges stay. Coloured stickers or paint on the lower face '
+         '(a filter\'s nose, hearts, butterflies) as patches of a colour that is not skin. Warnings only, '
+         'calibrated on synthetic filters. Not detected: white or black marks (sparkles, drawn whiskers), '
+         'stickers on the forehead, ears or crowns above the head (real hair accessories are allowed and look '
+         'the same), a swapped background, reshaped features.'),
 ]
 
 _RAN = ('pass', 'warn', 'fail')

@@ -1,6 +1,6 @@
 # passphoto-validation
 
-Checks a photo against the German ID photo rules (the Fotomustertafel) and says which rules it passes, which it fails and why. 37 checks feed 36 rules. Most face measurements come from [OFIQ](https://github.com/BSI-OFIQ/OFIQ-Project), the BSI's implementation of ISO/IEC 29794-5, the rest from MediaPipe and OpenCV. The answer comes as JSON or as a self-contained HTML report, with a proposed 35×45 mm crop when the framing is off.
+Checks a photo against the German ID photo rules (the Fotomustertafel) and says which rules it passes, which it fails and why. 38 checks feed 36 rules. Most face measurements come from [OFIQ](https://github.com/BSI-OFIQ/OFIQ-Project), the BSI's implementation of ISO/IEC 29794-5, the rest from MediaPipe and OpenCV. The answer comes as JSON or as a self-contained HTML report, with a proposed 35×45 mm crop when the framing is off.
 
 The Jupyter notebooks are the UI: `notebooks/pipeline_overview.ipynb` walks through the pipeline on the sample photos, `notebooks/evaluation.ipynb` shows how every check does on about 2,200 labelled photos and why the thresholds are where they are, `notebooks/api.ipynb` talks to the API. [PASSPORT_VALIDATOR.md](PASSPORT_VALIDATOR.md) has the architecture, the list of checks, the report format and the measured accuracy.
 

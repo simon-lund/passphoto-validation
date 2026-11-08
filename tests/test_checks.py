@@ -59,7 +59,8 @@ def _jpeg(image_bgr, quality):
 def test_original_passes_the_classic_checks(validator, photo):
     statuses = _statuses(validator, photo)
     for name in ('exposure', 'face_sharpness', 'compression', 'red_eyes', 'gaze', 'background_brightness',
-                 'background_pattern', 'background_gradient', 'background_shadow', 'print_defects', 'skin_smoothing'):
+                 'background_pattern', 'background_gradient', 'background_shadow', 'print_defects', 'skin_smoothing',
+                 'skin_colour_patches'):
         assert statuses[name] == 'pass', name
 
 
@@ -140,6 +141,48 @@ def test_smoothed_skin_warns_skin_smoothing(validator, photo):
         width = x1 - x0
         smooth[y - width // 2:y + width // 2, x0 - width // 4:x1 + width // 4] = photo[y - width // 2:y + width // 2, x0 - width // 4:x1 + width // 4]
     assert _statuses(validator, smooth)['skin_smoothing'] == 'warn'
+
+
+def _mesh_points(image_bgr):
+    with mp.solutions.face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1, refine_landmarks=True) as mesh:
+        points = mesh.process(np.ascontiguousarray(image_bgr[..., ::-1])).multi_face_landmarks[0].landmark
+    h, w = image_bgr.shape[:2]
+    return np.array([(p.x * w, p.y * h) for p in points])
+
+
+def test_whole_face_smoothing_warns_skin_smoothing(validator, photo):
+    # A filter over the whole face, eyes included: the eyes are as flat as the skin, so the texture ratio stays
+    # normal, but the edges of the face keep their strength while the skin's fine texture is gone
+    points = _mesh_points(photo)
+    x0, y0 = (points.min(axis=0) - 0.1 * points.ptp(axis=0)).clip(0).astype(int)
+    x1, y1 = (points.max(axis=0) + 0.1 * points.ptp(axis=0)).astype(int)
+    smooth = photo.copy()
+    smooth[y0:y1, x0:x1] = cv2.edgePreservingFilter(photo[y0:y1, x0:x1], flags=cv2.RECURS_FILTER, sigma_s=40, sigma_r=0.25)
+    statuses = _statuses(validator, smooth)
+    assert statuses['skin_smoothing'] == 'warn'
+    assert statuses['face_sharpness'] == 'pass'
+
+
+def test_blurred_photo_fails_sharpness_without_a_retouching_warning(validator, photo):
+    # An optical blur flattens the skin too, but the sharpness check reports it, so skin_smoothing stays quiet
+    statuses = _statuses(validator, cv2.GaussianBlur(photo, (0, 0), 4))
+    assert statuses['face_sharpness'] == 'fail'
+    assert statuses['skin_smoothing'] == 'pass'
+
+
+def test_coloured_stickers_on_the_face_warn_skin_colour_patches(validator, photo):
+    # A face filter's stickers: a pink nose and a coloured butterfly on each cheek
+    points = _mesh_points(photo)
+    face_width = np.linalg.norm(points[234] - points[454])
+    stickered = photo.copy()
+    radius = int(face_width * 0.08)
+    cv2.ellipse(stickered, tuple(points[1].astype(int)), (radius, int(radius * 0.7)), 0, 0, 360, (160, 120, 240), -1, cv2.LINE_AA)
+    for cheek, colour in ((50, (200, 80, 255)), (280, (255, 160, 0))):
+        cx, cy = points[cheek].astype(int)
+        size = int(face_width * 0.07)
+        for side in (-1, 1):
+            cv2.ellipse(stickered, (cx + side * size // 2, cy), (size // 2, int(size * 0.7)), side * 25, 0, 360, colour, -1, cv2.LINE_AA)
+    assert _statuses(validator, stickered)['skin_colour_patches'] == 'warn'
 
 
 def _red_pupils(image_bgr):
