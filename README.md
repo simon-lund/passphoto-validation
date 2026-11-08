@@ -56,6 +56,24 @@ uv run --extra test python scripts/eval_report.py --set ../datasets/frl-london-e
 
 Only the rule tables are meaningful there; its per-check table looks for the pipeline's check names, which this baseline doesn't have.
 
+## First results
+
+The London eval set (2,856 photos: 102 people × 28 variants built by passphoto-validation) was run on 2026-11-08 for $2.00 (20 million input tokens, about 7,000 per photo). `scripts/compare_london.py <set> --split test` compares the two systems on the test half (even person numbers, 52 photos per defect, 156 photos that should pass) and sweeps the thresholds; `uv run --group dev python scripts/compare_london.py ...` runs it.
+
+| On the test half | Pipeline | Baseline, one threshold pair (0.4 / 0.7) | Baseline, per-rule thresholds from the calibrate half |
+|---|---|---|---|
+| Good photos with no failing rule | 96% | 6% | 70% |
+| Good photos with neither fail nor warn | 83% | 0% | 24% |
+| Small head caught | 100% | 0% | 0% |
+| Off-centre face caught | 100% | 2% | 31% |
+| Smoothed skin flagged | 100% (warn) | 17–25% | 0–4% |
+| Background shadow caught | 83% | 100% | 100% |
+| Colour cast caught | 81% | 100% | 100% |
+| Low contrast | warn | fail, 100% | fail, 100% |
+| Stickers on the face | warn | fail, 100% | fail, 98% |
+
+Every other synthetic defect (blur, JPEG, dark, bright, pattern, object, red eyes, sunglasses, glare, yaw, roll, ink stains) is caught by both at 85 to 100%. What sinks the baseline is false alarms on compliant photos: `no_color_gradients` fires on 99% of them, `photo_format` on 63% (crops that are exactly 7:9), `no_face_shadows` on 47%, and no global threshold fixes that (at 0.95, 28% of good photos still get a false fail). Per-rule thresholds (fail above the 99th percentile of good calibrate photos) make it usable but leave it far behind on good photos, and it cannot measure proportions at all. The model is the better detector for several visual defects, which is worth knowing when the pipeline's checks are tuned.
+
 ## What to know before running it
 
 - **Every photo leaves the machine.** passphoto-validation was built so that no face photo goes to a third-party API; this repo exists to measure that pipeline against the simplest alternative, and it does the opposite. The London Set's consent covers studies only: sending it to OpenAI is a decision to take, not a default. The nine sample photos in passphoto-validation's `tests/test-images` are public.
