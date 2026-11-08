@@ -33,10 +33,13 @@ FAIL_OPTION = typer.Option(Thresholds.fail_at, '--fail-at', help='A rule fails f
 
 
 def make_client():
-    """An OpenAI client; reads OPENAI_API_KEY. Replaced in tests."""
+    """An OpenAI client; reads OPENAI_API_KEY from the environment or from a .env file in the working directory.
+    Replaced in tests."""
+    from dotenv import find_dotenv, load_dotenv
     from openai import OpenAI
+    load_dotenv(find_dotenv(usecwd=True))  # the .env of the folder the command runs in, not of this file's
     if not os.environ.get('OPENAI_API_KEY'):
-        raise typer.BadParameter('OPENAI_API_KEY is not set.')
+        raise typer.BadParameter('OPENAI_API_KEY is not set (export it, or put it in a .env file next to pyproject.toml).')
     return OpenAI(max_retries=3)
 
 

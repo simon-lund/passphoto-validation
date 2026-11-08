@@ -110,3 +110,15 @@ def test_rules_lists_the_catalogue():
     result = runner.invoke(cli.app, ['rules'])
     assert result.exit_code == 0
     assert 'no_retouching' in result.output
+
+
+def test_the_key_comes_from_the_environment_or_a_dotenv_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    with pytest.raises(Exception, match='OPENAI_API_KEY is not set'):
+        cli.make_client()
+
+    (tmp_path / '.env').write_text('OPENAI_API_KEY=sk-test-from-dotenv\n')
+    client = cli.make_client()
+    assert client.api_key == 'sk-test-from-dotenv'
+    assert client.max_retries == 3

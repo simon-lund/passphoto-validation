@@ -14,7 +14,7 @@ git clone git@github.com:simon-lund/passphoto-decisions.git && cd passphoto-deci
 uv sync
 ```
 
-Set `OPENAI_API_KEY` in the environment. `PASSPHOTO_MODEL` overrides the model (default `gpt-6-luna`, the only one the Decisions API serves today).
+Set `OPENAI_API_KEY` in the environment, or put `OPENAI_API_KEY=...` in a `.env` file next to `pyproject.toml` (gitignored). `PASSPHOTO_MODEL` overrides the model (default `gpt-6-luna`, the only one the Decisions API serves today).
 
 ## Run
 
