@@ -58,7 +58,7 @@ def test_the_table_is_pinned():
         'ofiq_background': dict(warn_below=40, fail_below=25),
         'ofiq_illumination': dict(warn_below=72, fail_below=60),
         'ofiq_overexposure': dict(warn_below=90, fail_below=50),
-        'ofiq_natural_colour': dict(warn_below=80, fail_below=50),
+        'ofiq_natural_colour': dict(warn_below=80, fail_below=60),
     }
 
 

@@ -49,7 +49,8 @@ THRESHOLDS: Dict[str, Thresholds] = {
     'background_shadow': Thresholds(
         dict(warn_above=5, fail_above=9),
         'L* the band next to the person is darker than that plane; compliant crops reach 9 (one photo; 98% stay '
-        'under 5), the shadow variant starts at 3 (90% above 5). The margin is thin'),
+        'under 5), the shadow variant starts at 3 (90% above 5). The margin is thin. The misses are shadows the '
+        'segmentation swallowed into the person mask, not a threshold matter; a tighter mask fails good crops'),
     'print_defects': Thresholds(
         dict(fail_at=3),
         'Marks on the background; any mark warns, three fail. Compliant crops show up to 2 (stray hair), the ink '
@@ -113,7 +114,11 @@ THRESHOLDS: Dict[str, Thresholds] = {
     'ofiq_illumination': Thresholds(
         dict(warn_below=72, fail_below=60), 'Side shadow on the face: 98%; a shadow from above is not seen'),
     'ofiq_overexposure': Thresholds(dict(warn_below=90, fail_below=50), 'Brightened: 90% caught, 8% warned'),
-    'ofiq_natural_colour': Thresholds(dict(warn_below=80, fail_below=50), 'Colour cast: 81% caught, 10% warned'),
+    'ofiq_natural_colour': Thresholds(
+        dict(warn_below=80, fail_below=60),
+        'Every London crop that should pass scores 100; the colour-cast variant scores 39 in the middle, 52-60 on the '
+        'ones a fail threshold of 50 only warned on, and 100 on one in ten (OFIQ sees nothing there). At 60: 88-90% '
+        'caught; on real candid photos 10% fail instead of 9%'),
 }
 
 _WARN_KEYS = ('warn_above', 'warn_below', 'warn_share_above', 'min_brightness')
