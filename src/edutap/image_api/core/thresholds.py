@@ -116,7 +116,7 @@ THRESHOLDS: Dict[str, Thresholds] = {
     'ofiq_natural_colour': Thresholds(dict(warn_below=80, fail_below=50), 'Colour cast: 81% caught, 10% warned'),
 }
 
-_WARN_KEYS = ('warn_above', 'warn_below', 'min_brightness')
+_WARN_KEYS = ('warn_above', 'warn_below', 'warn_share_above', 'min_brightness')
 _FAIL_KEYS = ('fail_above', 'fail_below', 'fail_at')
 
 

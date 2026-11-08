@@ -68,7 +68,13 @@ def test_warn_fail_reads_either_direction():
     assert warn_fail('background_brightness') == (120, 80)
     assert warn_fail('print_defects') == (None, 3)
     assert warn_fail('skin_smoothing') == (0.15, None)
+    assert warn_fail('skin_colour_patches') == (0.02, None)
     assert warn_fail('red_eyes') == (None, 0.3)
+    # Every entry with a warn or fail key is readable this way
+    for name, entry in THRESHOLDS.items():
+        warn, fail = warn_fail(name)
+        assert (warn is not None) == any(key.startswith(('warn_', 'min_')) for key in entry.kwargs), name
+        assert (fail is not None) == any(key.startswith('fail_') for key in entry.kwargs), name
 
 
 def test_thresholds_returns_a_copy():

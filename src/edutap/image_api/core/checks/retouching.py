@@ -84,7 +84,8 @@ def check_skin_smoothing(context: ValidationContext, warn_below: float, warn_gra
     context.measurements['skin_texture'] = skin_texture
     context.measurements['eye_texture'] = eye_texture
     context.measurements['skin_texture_ratio'] = ratio
-    context.measurements['skin_gradient_ratio'] = gradient_ratio
+    if gradient_ratio is not None:  # a flat face has no gradient to compare with
+        context.measurements['skin_gradient_ratio'] = gradient_ratio
     if ratio < warn_below:
         context.issues.append(ValidationIssue(
             category='warning', severity=4,
