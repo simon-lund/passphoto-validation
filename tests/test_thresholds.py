@@ -1,6 +1,6 @@
 """The thresholds table is what the validator runs with, and the values are pinned."""
-from edutap.image_api.core import PassportPhotoValidator
-from edutap.image_api.core.thresholds import THRESHOLDS, thresholds, warn_fail
+from passphoto_validation.core import PassportPhotoValidator
+from passphoto_validation.core.thresholds import THRESHOLDS, thresholds, warn_fail
 
 
 def _registered():

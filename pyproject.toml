@@ -1,25 +1,21 @@
 [project]
-name = "edutap.image_api"
-version = "1.0.0.dev0"
-description = "A eduTAP Image API Service based on FastAPI to to auto crop and transform photos for id cards and passes in smart device wallets."
-keywords = ["image", "API"]
+name = "passphoto-validation"
+version = "0.1.0"
+description = "Checks a photo against the German ID photo rules (the Fotomustertafel): 38 checks feeding 36 rules, as a CLI, an API and an HTML report."
+keywords = ["passport photo", "ID photo", "Fotomustertafel", "ISO/IEC 29794-5", "OFIQ"]
 readme = "README.md"
 authors = [
-    {name = "Philipp Auersperg-Castell", email = "phil@bluedynamics.com"},
-    {name = "Alexander Loechel", email = "Alexander.Loechel@lmu.de"},
+    {name = "Simon Lund", email = "41208671+simon-lund@users.noreply.github.com"},
 ]
-requires-python = ">=3.10"
+# MediaPipe has no wheels for newer Pythons yet (.python-version pins 3.12)
+requires-python = ">=3.12"
 license = { text = "EUPL 1.2" }
 classifiers = [
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "License :: OSI Approved :: European Union Public Licence 1.2 (EUPL 1.2)",
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "Topic :: Software Development :: Libraries",
-    "Topic :: Software Development :: Object Brokering",
-    "Operating System :: OS Independent",
+    "Operating System :: POSIX :: Linux",
 ]
 dependencies = [
     "pydantic>=2.0",
@@ -38,9 +34,8 @@ dependencies = [
 ]
 
 [project.urls]
-Source = "https://github.com/edutap-eu/edutap.image_api"
-Issues = "https://github.com/edutap-eu/edutap.image_api/issues"
-Documentation = "https://docs.edutap.eu/packages/edutap_image_api/index.html"
+Source = "https://github.com/simon-lund/passphoto-validation"
+Issues = "https://github.com/simon-lund/passphoto-validation/issues"
 
 [project.optional-dependencies]
 test = [
@@ -61,8 +56,8 @@ siglip = [
 ]
 
 [project.scripts]
-passport-validator = "edutap.image_api.cli:app"
-passport-validator-api = "edutap.image_api.check_api:main"
+passport-validator = "passphoto_validation.cli:app"
+passport-validator-api = "passphoto_validation.check_api:main"
 
 [build-system]
 requires = ["setuptools>=61"]
@@ -82,7 +77,7 @@ explicit = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-"edutap.image_api" = ["templates/*.html"]
+"passphoto_validation" = ["templates/*.html"]
 
 [tool.pytest.ini_options]
 minversion = "6.0"

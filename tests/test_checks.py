@@ -12,11 +12,11 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from edutap.image_api.core import PassportPhotoValidator
-from edutap.image_api.core.checks import geometry
-from edutap.image_api.core.config import ValidatorConfig
-from edutap.image_api.core.models import Crop
-from edutap.image_api.core.utils import convert_to_bgr
+from passphoto_validation.core import PassportPhotoValidator
+from passphoto_validation.core.checks import geometry
+from passphoto_validation.core.config import ValidatorConfig
+from passphoto_validation.core.models import Crop
+from passphoto_validation.core.utils import convert_to_bgr
 
 IMAGES = pathlib.Path(__file__).parent / 'test-images'
 needs_ofiq = pytest.mark.skipif(not os.environ.get('OFIQ_CONFIG_DIR'), reason='OFIQ_CONFIG_DIR is not set')

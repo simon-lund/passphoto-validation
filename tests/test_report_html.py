@@ -7,7 +7,7 @@ import re
 from markupsafe import escape
 from PIL import Image
 
-from edutap.image_api.report_html import COVERAGE, PREVIEW_MAX_SIDE, STATUSES, SUMMARY_ORDER, render_report
+from passphoto_validation.report_html import COVERAGE, PREVIEW_MAX_SIDE, STATUSES, SUMMARY_ORDER, render_report
 
 
 def _check(name, status, reasons=(), **measurements):

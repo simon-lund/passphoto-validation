@@ -23,7 +23,7 @@ def _init():
     import cv2
     # Every worker would otherwise start a thread per core in OpenCV
     cv2.setNumThreads(1)
-    from edutap.image_api.core import PassportPhotoValidator
+    from passphoto_validation.core import PassportPhotoValidator
     _validator = PassportPhotoValidator()
 
 

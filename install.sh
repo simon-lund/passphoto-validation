@@ -117,8 +117,8 @@ say "Checking the installation"
 (cd "$REPO" && GLOG_minloglevel=2 uv run python - <<'PY'
 import sys
 import cv2
-from edutap.image_api.core import PassportPhotoValidator
-from edutap.image_api.core.config import ValidatorConfig
+from passphoto_validation.core import PassportPhotoValidator
+from passphoto_validation.core.config import ValidatorConfig
 
 config = ValidatorConfig(autocrop=False)
 validator = PassportPhotoValidator(config)

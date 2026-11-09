@@ -13,12 +13,12 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from edutap.image_api.core.utils import prepare_image
-from edutap.image_api.core import PassportPhotoValidator, ValidatorConfig
+from passphoto_validation.core.utils import prepare_image
+from passphoto_validation.core import PassportPhotoValidator, ValidatorConfig
 
 app = typer.Typer(
     name="passport-validator",
-    help="Validate passport photos against ICAO/ISO 19794-5 standards",
+    help="Check photos against the German ID photo rules (the Fotomustertafel)",
     add_completion=False,
 )
 console = Console()
@@ -274,6 +274,6 @@ def batch(
 @app.command()
 def version():
     """Show version information."""
-    console.print("[bold]Passport Photo Validator[/bold]")
-    console.print("Standards: ICAO/ISO 19794-5")
-    console.print("Version: 1.0.0")
+    from importlib.metadata import version as installed_version
+    console.print(f"[bold]passphoto-validation[/bold] {installed_version('passphoto-validation')}")
+    console.print("Rules: the German Fotomustertafel, measured largely with ISO/IEC 29794-5 (OFIQ)")

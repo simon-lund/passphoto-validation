@@ -177,7 +177,7 @@ def check_photo(request: Request, response: Response,
 
 def main():
     uvicorn.run(
-        'edutap.image_api.check_api:app',
+        'passphoto_validation.check_api:app',
         host=os.environ.get('PASSPORT_API_HOST', '127.0.0.1'),
         port=int(os.environ.get('PASSPORT_API_PORT', '9600')),
     )

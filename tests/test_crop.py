@@ -1,5 +1,5 @@
 """The crop planner frames the head as the rules ask, or says why no 35x45 box fits inside the photo."""
-from edutap.image_api.core.crop import ASPECT, FACE_CENTRE_RANGE, HEAD_RANGE, MAX_OFFSET, plan_crop
+from passphoto_validation.core.crop import ASPECT, FACE_CENTRE_RANGE, HEAD_RANGE, MAX_OFFSET, plan_crop
 
 
 def _face(centre_x, centre_y, size):

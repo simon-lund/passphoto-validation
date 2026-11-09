@@ -10,9 +10,9 @@ from fastapi.testclient import TestClient
 from markupsafe import escape
 from PIL import Image
 
-from edutap.image_api.api_schema import CheckReport, ErrorResponse
-from edutap.image_api.check_api import app, prefers_html
-from edutap.image_api.core.rules import RULES
+from passphoto_validation.api_schema import CheckReport, ErrorResponse
+from passphoto_validation.check_api import app, prefers_html
+from passphoto_validation.core.rules import RULES
 
 IMAGES = pathlib.Path(__file__).parent / 'test-images'
 CHECK_STATUSES = {'pass', 'warn', 'fail', 'skipped', 'error'}

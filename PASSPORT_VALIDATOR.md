@@ -35,7 +35,7 @@ uv run --extra test pytest
 The passport photo validator has been refactored into a modular architecture with clear separation of concerns:
 
 ```
-src/edutap/image_api/
+src/passphoto_validation/
 ├── core/                    # Business logic (pure)
 │   ├── __init__.py
 │   └── validator.py         # Validation engine
@@ -182,8 +182,8 @@ passport-validator batch ./photos/ -o ./reports/
 **3. Programmatic usage (Python):**
 ```python
 from PIL import Image
-from edutap.image_api.core import PassportPhotoValidator, ValidatorConfig
-from edutap.image_api.core.utils import prepare_image
+from passphoto_validation.core import PassportPhotoValidator, ValidatorConfig
+from passphoto_validation.core.utils import prepare_image
 
 # Load image (applies EXIF rotation, returns BGR for OpenCV)
 image = prepare_image(Image.open("photo.jpg"))

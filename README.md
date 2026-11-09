@@ -95,4 +95,4 @@ The 240 real photos behind `notebooks/real_photos.ipynb` come from Open Images (
 
 ## Licence
 
-EUPL 1.2. The sample photos `tests/test-images/1.jpg` to `9.jpg` come from eduTAP's `edutap.image_api`.
+EUPL 1.2. The code started as a fork of eduTAP's `edutap.image_api` by Philipp Auersperg-Castell and Alexander Loechel (EUPL 1.2); the sample photos `tests/test-images/1.jpg` to `9.jpg` come from there.

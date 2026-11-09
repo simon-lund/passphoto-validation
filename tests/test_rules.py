@@ -1,8 +1,8 @@
 """Pin the rule catalogue and how rule statuses are derived from checks."""
-from edutap.image_api.core import PassportPhotoValidator
-from edutap.image_api.core.models import CheckResult
-from edutap.image_api.core import rules
-from edutap.image_api.core.rules import GROUPS, RULES, Rule, evaluate_rules
+from passphoto_validation.core import PassportPhotoValidator
+from passphoto_validation.core.models import CheckResult
+from passphoto_validation.core import rules
+from passphoto_validation.core.rules import GROUPS, RULES, Rule, evaluate_rules
 
 
 def _check_names():
