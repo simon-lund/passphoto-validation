@@ -1,22 +1,10 @@
 """Image quality validation checks (sharpness, resolution, compression)."""
-from typing import Tuple, Literal
+from typing import Tuple
 
 import cv2
 import numpy as np
-from brisque import BRISQUE
 
 from ..models import CheckSkipped, ValidationIssue, ValidationContext
-
-
-_BRISQUE = None
-
-
-def _brisque() -> BRISQUE:
-    """Load the BRISQUE model once; building it reads the model files from disk."""
-    global _BRISQUE
-    if _BRISQUE is None:
-        _BRISQUE = BRISQUE(url=False)
-    return _BRISQUE
 
 
 def check_resolution(context: ValidationContext, min_res: Tuple[int, int] = (413, 531), recommended_res: Tuple[int, int] = (827, 1063)):
@@ -44,64 +32,6 @@ def check_resolution(context: ValidationContext, min_res: Tuple[int, int] = (413
             message=f'Resolution is acceptable but could be higher for best quality (recommended: >{recommended_width}x{recommended_height}px).',
             severity=4
         ))
-
-
-def check_distortions(context: ValidationContext,
-                        area: Literal["full", "face"] = "full",
-                        error_threshold: float = 30.0,
-                        warning_threshold: float = 10.0,
-                        debug: bool = False):
-    """
-    Assess image quality (blur, noise, artifacts) for a specific area using the BRISQUE model.
-
-    :param context: The validation context.
-    :param area: The area to check: 'full' for the entire image, 'face' for the detected face region.
-    :param error_threshold: BRISQUE score above this is an error.
-    :param warning_threshold: BRISQUE score above this is a warning.
-    :param debug: If True, returns visualization data.
-    """
-    if area == 'face':
-        if not context.face_data or 'bbox' not in context.face_data:
-            raise CheckSkipped('No face found.')
-        bbox = context.face_data['bbox']
-        x, y, w, h = bbox['x'], bbox['y'], bbox['width'], bbox['height']
-        target_image_bgr = context.image_np[max(0, y):max(0, y + h), max(0, x):max(0, x + w)]
-        measurement_key = 'brisque_score_face'
-        area_name = 'Face region'
-    elif area == 'full':
-        target_image_bgr = context.image_np
-        measurement_key = 'brisque_score_overall'
-        area_name = 'Overall image'
-    else:
-        raise ValueError("Area must be either 'full' or 'face'.")
-
-    if target_image_bgr.size == 0:
-        raise CheckSkipped(f'{area_name} area is empty.')
-
-    rgb_image = cv2.cvtColor(target_image_bgr, cv2.COLOR_BGR2RGB)
-    brisque_score = _brisque().score(rgb_image)
-    context.measurements[measurement_key] = float(brisque_score)
-
-    if brisque_score > error_threshold:
-        context.issues.append(ValidationIssue(
-            category='error',
-            message=f'{area_name} area quality is poor (artifacts/blur detected). (BRISQUE Score: {brisque_score:.2f})',
-            severity=8 if area == 'face' else 5
-        ))
-    elif brisque_score > warning_threshold:
-        context.issues.append(ValidationIssue(
-            category='warning',
-            message=f'{area_name} area may have artifacts or be slightly blurry. (BRISQUE Score: {brisque_score:.2f})',
-            severity=5 if area == 'face' else 2
-        ))
-
-    if debug:
-        analyzed_image_for_debug = cv2.cvtColor(target_image_bgr, cv2.COLOR_BGR2GRAY)
-        return {
-            'brisque_score': brisque_score,
-            'analyzed_image': analyzed_image_for_debug
-        }
-    return None
 
 
 def check_face_sharpness(context: ValidationContext, warn_below: float, fail_below: float, face_width: int = 256):

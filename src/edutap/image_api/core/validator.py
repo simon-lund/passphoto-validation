@@ -137,10 +137,6 @@ class PassportPhotoValidator:
         thresholds come from core/thresholds.py, which also says where each number came from; a check
         without an entry there runs with its function's defaults.
         """
-        distortion = dict(
-            error_threshold=self.config.distortion_error_threshold,
-            warning_threshold=self.config.distortion_warning_threshold,
-        )
         return [
             ('resolution', quality.check_resolution,
              dict(min_res=self.config.min_res, recommended_res=self.config.recommended_res)),

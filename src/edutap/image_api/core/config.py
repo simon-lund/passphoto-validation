@@ -21,14 +21,6 @@ class ValidatorConfig(BaseSettings):
         default=3 / 4,
         description="The target width/height aspect ratio for crop suggestions (e.g., 3/4 for passport)."
     )
-    distortion_error_threshold: float = Field(
-        default=30.0,
-        description="BRISQUE score above this is considered a distortion error."
-    )
-    distortion_warning_threshold: float = Field(
-        default=10.0,
-        description="BRISQUE score above this is considered a distortion warning."
-    )
     min_res_width: int = Field(
         default=413,
         description="The minimum allowed image width (35 mm at 300 dpi)."

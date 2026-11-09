@@ -1,4 +1,0 @@
-include *.yaml
-include Dockerfile
-recursive-exclude frontend *
-recursive-exclude tests *.jpg

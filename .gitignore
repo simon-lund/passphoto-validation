@@ -1,61 +1,24 @@
-# Generated from:
-# https://github.com/plone/meta/tree/master/config/default
-# See the inline comments on how to expand/tweak this configuration file
-# python related
-*.egg-info
+# python
+__pycache__/
 *.pyc
 *.pyo
-
-# translation related
-*.mo
-
-# tools related
+*.egg-info
 build/
+dist/
 .coverage
 coverage.xml
-dist/
-docs/_build
-__pycache__/
-.tox
+.pytest_cache/
+.mypy_cache/
+.venv/
+
+# editors
 .vscode/
 .idea/
-node_modules/
-sandbox/
-.mypy_cache/
-.pytest_cache/
 
-# venv / buildout related
-bin/
-develop-eggs/
-eggs/
-.eggs/
-etc/
-.installed.cfg
-include/
-lib/
-lib64
-.mr.developer.cfg
-parts/
-pyvenv.cfg
-var/
-
-# mxdev
-/instance/
-/.make-sentinels/
-/*-mxdev.txt
-/reports/
-/sources/
-/venv/
-.installed.txt
-
+# local settings and results
 /.env
 /*.json
-
-# docker setup related
-/kafka_data/
-/letsencrypt/
-/db/
-db/
+/reports/
 
 # jupyter
 .ipynb_checkpoints/

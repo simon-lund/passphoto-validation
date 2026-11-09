@@ -93,10 +93,6 @@ uv run python scripts/make_test_photos.py --source ../datasets/frl-london/neutra
 
 The 240 real photos behind `notebooks/real_photos.ipynb` come from Open Images (Flickr, CC BY 2.0) and are built by `scripts/build_openimages_set.py` from Google's metadata; `credits.csv` next to them lists each photo's author and licence.
 
-## Not maintained
-
-`Dockerfile`, `docker-compose.yaml` and `traefik.yaml` are left from the eduTAP service this started as. They install neither OFIQ nor the current entry points.
-
 ## Licence
 
 EUPL 1.2. The sample photos `tests/test-images/1.jpg` to `9.jpg` come from eduTAP's `edutap.image_api`.

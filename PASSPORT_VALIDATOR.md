@@ -373,23 +373,13 @@ It never adds background and never changes `is_valid` of the photo as sent; it o
 4. **Extensibility**
    - Add new validation checks in `core/validator.py`
    - Add new CLI commands in `cli.py`
-   - Add new API endpoints in `main2.py`
+   - Add new API endpoints in `check_api.py`
 
 ## Development
 
 **Run tests:**
 ```bash
-pytest tests/
-```
-
-**Type checking:**
-```bash
-mypy src/
-```
-
-**Lint:**
-```bash
-pre-commit run --all-files
+uv run --extra test pytest
 ```
 
 ## Dependencies

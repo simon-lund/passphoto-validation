@@ -4,8 +4,6 @@ from typing import Optional
 import cv2
 import mediapipe as mp
 import numpy as np
-from skimage import feature
-from skimage.feature import local_binary_pattern
 
 from ..models import CheckSkipped, ValidationIssue, ValidationContext
 
@@ -55,47 +53,6 @@ def _find_background_rectangles(mask, grid_sizes=(64, 128), erosion_kernel_size:
                     rectangles.append((x, y, size, size, size * size))
 
     return rectangles
-
-
-def _sharpen_image(gray_image):
-    """
-    Sharpen a image.
-
-    You can use this to enhance texture patterns in advance of edge detection.
-    This helps to better distinguish cluttered backgrounds from smooth ones.
-    """
-    # Sharpening kernel
-    kernel = np.array([[-1, -1, -1],
-                       [-1, 9, -1],
-                       [-1, -1, -1]])
-    sharpened = cv2.filter2D(gray_image, -1, kernel)
-    return sharpened
-
-
-def _calculate_lbp_variance(gray_image, rectangles):
-    """
-    Calculate Local Binary Pattern to assess texture across block-wise background regions.
-    Higher variance in LBP indicates more texture/patterns.
-
-    https://scikit-image.org/docs/0.25.x/auto_examples/features_detection/plot_local_binary_pattern.html
-
-    :return: Weighted average of LBP variances across rectangles
-    """
-    lbp_variances = []
-    weights = []
-
-    for x, y, w, h, area in rectangles:
-        region = gray_image[y:y + h, x:x + w]
-        lbp = local_binary_pattern(region, P=8, R=1, method='uniform')
-
-        # For uniform backgrounds, LBP should have low variance
-        lbp_var = np.var(lbp)
-        lbp_variances.append(lbp_var)
-        weights.append(area)
-
-    if lbp_variances:
-        return np.average(lbp_variances, weights=weights)
-    return 0.0
 
 
 def _calculate_color_range(image, rectangles):
@@ -192,33 +149,6 @@ def _calculate_color_coherence_cov(image, rectangles):
     return 0.0
 
 
-def _calculate_edge_density_rect(gray_image, rectangles):
-    """
-    Calculate edge density on rectangles using sharpened image.
-    Sharpening enhances texture patterns for better detection.
-    """
-    # Sharpen the image first to enhance edges
-    sharpened = _sharpen_image(gray_image)
-
-    # Use Canny edge detection on the sharpened image
-    edges = feature.canny(sharpened, sigma=2.0)
-
-    edge_densities = []
-    weights = []
-
-    for x, y, w, h, area in rectangles:
-        edge_region = edges[y:y + h, x:x + w]
-        density = np.sum(edge_region) / edge_region.size
-        edge_densities.append(density)
-        weights.append(area)
-
-    if edge_densities:
-        weights = np.array(weights)
-        weights = weights / weights.sum()
-        return np.average(edge_densities, weights=weights)
-    return 0.0
-
-
 def check_background_brightness(context: ValidationContext, min_brightness: float = 80.0,
                                 fail_below: Optional[float] = None, debug: bool = False):
     """
@@ -256,51 +186,6 @@ def check_background_brightness(context: ValidationContext, min_brightness: floa
 
     if debug:
         return {'brightness': mean_brightness}
-    return None
-
-
-def check_background_texture(context: ValidationContext, lbp_threshold: float = 50.0, debug: bool = False):
-    """
-    Check for texture patterns using Local Binary Patterns.
-
-    :param context: The validation context with segmentation data.
-    :param lbp_threshold: Maximum acceptable LBP variance.
-    :param debug: If True, returns visualization data.
-    """
-    if context.segmentation_mask is None:
-        raise CheckSkipped("No segmentation mask present.")
-
-    background_mask_binary = (context.segmentation_mask < 0.5).astype(np.uint8)
-    rectangles = _find_background_rectangles(background_mask_binary)
-
-    if len(rectangles) < 3:
-        raise CheckSkipped(f"Not enough clean background regions ({len(rectangles)}) for texture analysis.")
-
-    gray_full = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2GRAY)
-    avg_lbp_variance = _calculate_lbp_variance(gray_full, rectangles)
-    context.measurements['background_avg_lbp_variance'] = float(avg_lbp_variance)
-    context.measurements['background_rect_count'] = len(rectangles)
-
-    if avg_lbp_variance > lbp_threshold:
-        context.issues.append(ValidationIssue(
-            category='error',
-            message=f'Background has texture patterns (LBP variance: {avg_lbp_variance:.2f}). Background must be plain.',
-            severity=7
-        ))
-
-    if debug:
-        kernel = np.ones((7, 7), np.uint8)
-        eroded_mask_viz = cv2.erode(background_mask_binary, kernel, iterations=3) * 255
-        rect_viz = cv2.cvtColor(gray_full, cv2.COLOR_GRAY2BGR)
-        for x, y, w, h, area in rectangles:
-            cv2.rectangle(rect_viz, (x, y), (x + w, y + h), (0, 255, 0), 2)
-
-        return {
-            'avg_lbp_variance': avg_lbp_variance,
-            'rectangles': rectangles,
-            'rectangles_visualization': rect_viz,
-            'eroded_mask': eroded_mask_viz
-        }
     return None
 
 
@@ -425,58 +310,6 @@ def check_background_consistency(context: ValidationContext, cov_threshold: floa
 
     if debug:
         return {'color_coherence_cov': color_coherence_cov}
-    return None
-
-
-def check_background_clutter(context: ValidationContext, edge_density_threshold: float = 0.15, debug: bool = False):
-    """
-    Check for clutter/patterns using sharpened edge density analysis.
-
-    :param context: The validation context with segmentation data.
-    :param edge_density_threshold: Maximum acceptable edge density (0.0-1.0).
-    :param debug: If True, returns visualization data.
-    """
-    if context.segmentation_mask is None:
-        raise CheckSkipped("No segmentation mask present.")
-
-    background_mask_binary = (context.segmentation_mask < 0.5).astype(np.uint8)
-
-    if np.sum(background_mask_binary) == 0:
-        if context.face_data and 'bbox' in context.face_data:
-            face_bbox = context.face_data['bbox']
-            face_area = face_bbox['width'] * face_bbox['height']
-            image_area = context.width * context.height
-            if face_area / image_area > 0.85:
-                raise CheckSkipped("No background pixels found, likely because the face covers the entire image.")
-        raise CheckSkipped("Could not identify any background pixels for analysis. This indicates a segmentation failure.")
-
-    rectangles = _find_background_rectangles(background_mask_binary)
-
-    if len(rectangles) < 3:
-        raise CheckSkipped(f"Not enough clean background regions ({len(rectangles)}) for clutter analysis.")
-
-    gray_full = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2GRAY)
-    edge_density = _calculate_edge_density_rect(gray_full, rectangles)
-    context.measurements['background_edge_density'] = float(edge_density)
-    context.measurements['background_rect_count'] = len(rectangles)
-
-    if edge_density > edge_density_threshold:
-        context.issues.append(ValidationIssue(
-            category='error',
-            message=f'Background has high edge density ({edge_density:.2%}), indicating patterns or objects.',
-            severity=7
-        ))
-
-    if debug:
-        sharpened = _sharpen_image(gray_full)
-        edges = feature.canny(sharpened, sigma=2.0)
-        edge_viz = (edges * 255).astype(np.uint8)
-
-        return {
-            'edge_density': edge_density,
-            'sharpened_gray': sharpened,
-            'edge_density_map': edge_viz
-        }
     return None
 
 
