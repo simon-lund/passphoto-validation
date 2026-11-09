@@ -16,7 +16,7 @@ See the whole pipeline at work on the sample photos (per rule and per check, plu
 uv run --extra test jupyter lab notebooks/pipeline_overview.ipynb
 ```
 
-`notebooks/evaluation.ipynb` shows how every check and rule does on about 2,200 labelled photos, and why the thresholds are where they are. `notebooks/visualize_checks2.ipynb` shows the internals of the background checks. `notebooks/api.ipynb` sends photos to the API and shows both answers, the JSON and the HTML report. Other entry points:
+`notebooks/evaluation.ipynb` shows how every check and rule does on about 2,850 labelled photos, and why the thresholds are where they are. `notebooks/stichprobe.ipynb` draws a random sample of those photos, runs the validator on each and shows it with its label and the verdict, to check the numbers by eye. `notebooks/visualize_checks2.ipynb` shows the internals of the background checks. `notebooks/api.ipynb` sends photos to the API and shows both answers, the JSON and the HTML report. Other entry points:
 
 ```bash
 uv run passport-validator validate tests/test-images/9.jpg -v
@@ -257,7 +257,7 @@ Some OFIQ measures aren't used because they failed on the evaluation set:
 
 The checks they replaced (BRISQUE, the solvePnP head pose, face-brightness exposure, face shadows by variance, eye and mouth ratios from the face mesh) were removed for the same reason. The old pipeline's results are in the notebook for comparison.
 
-**How well it works** (London Set, 102 people; see `notebooks/evaluation.ipynb`):
+**How well it works** (London Set, 102 people; see `notebooks/evaluation.ipynb`, and `notebooks/stichprobe.ipynb` for a random sample of the photos with their verdicts):
 - **Defects caught as fail:** 94-100% for most. The exceptions:
   - smiles: 67% fail, 13% warn;
   - colour casts: 89% (one in ten casts scores 100 on OFIQ's natural colour and is not seen; the fail threshold rose from 50 to 60 on 2026-11-08, which costs 1% more fails on real candid photos);

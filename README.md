@@ -2,7 +2,9 @@
 
 Checks a photo against the German ID photo rules (the Fotomustertafel) and says which rules it passes, which it fails and why. 38 checks feed 36 rules. Most face measurements come from [OFIQ](https://github.com/BSI-OFIQ/OFIQ-Project), the BSI's implementation of ISO/IEC 29794-5, the rest from MediaPipe and OpenCV. The answer comes as JSON or as a self-contained HTML report, with a proposed 35×45 mm crop when the framing is off.
 
-The Jupyter notebooks are the UI: `notebooks/pipeline_overview.ipynb` walks through the pipeline on the sample photos, `notebooks/evaluation.ipynb` shows how every check does on about 2,200 labelled photos and why the thresholds are where they are, `notebooks/api.ipynb` talks to the API. [PASSPORT_VALIDATOR.md](PASSPORT_VALIDATOR.md) has the architecture, the list of checks, the report format and the measured accuracy.
+![The HTML report for a sample photo: the verdict, the rules to fix with the reason for each, and the planned 35×45 crop that would make the photo valid](docs/report.png)
+
+The Jupyter notebooks are the UI: `notebooks/pipeline_overview.ipynb` walks through the pipeline on the sample photos, `notebooks/evaluation.ipynb` shows how every check does on about 2,850 labelled photos and why the thresholds are where they are, `notebooks/stichprobe.ipynb` draws a random sample of those photos and shows each with its label and the validator's verdict, to check the claims by eye, `notebooks/api.ipynb` talks to the API. [PASSPORT_VALIDATOR.md](PASSPORT_VALIDATOR.md) has the architecture, the list of checks, the report format and the measured accuracy.
 
 ## Install
 
@@ -67,7 +69,29 @@ uv run --extra test pytest
 
 ## Evaluation data
 
-The labelled photo sets behind `notebooks/evaluation.ipynb` and `notebooks/real_photos.ipynb` (the Face Research Lab London Set and 240 Flickr photos from Open Images) are not in the repo. `scripts/build_eval_set.py` and `scripts/build_openimages_set.py` build them from the originals, `scripts/run_eval.py` runs the validator over a set and writes the results the notebooks read.
+The labelled photo sets behind the evaluation notebooks are not in the repo. The [Face Research Lab London Set](https://doi.org/10.6084/m9.figshare.5047666) (102 people photographed on a grey backdrop, neutral and smiling, front and 3/4 views; CC BY 4.0, but its subjects consented to use in studies, so neither it nor anything made from it may be committed or redistributed) downloads in one step, and two more build and run the evaluation set: about 2,850 photos, the compliant crop of each person, their real smiling and 3/4-view photos, and 24 synthetic variants drawn into each compliant crop, 22 of which break exactly one rule and 2 of which (a 4° roll, clear glasses) must still pass. Even ids are the test half, odd ids the half the thresholds were set on.
+
+```bash
+uv run python scripts/download_london_set.py --out ../datasets/frl-london
+```
+
+```bash
+uv run python scripts/build_eval_set.py --source ../datasets/frl-london --out ../datasets/frl-london-eval
+```
+
+```bash
+uv run python scripts/run_eval.py --set ../datasets/frl-london-eval
+```
+
+For a quick set of test photos, `scripts/make_test_photos.py` takes any folder of frontal portraits (the London Set's `neutral_front`, or your own), crops each to a compliant photo and draws one defect into each copy, with a manifest that says which rule each photo breaks:
+
+```bash
+uv run python scripts/make_test_photos.py --source ../datasets/frl-london/neutral_front --out ../datasets/test-photos --count 100
+```
+
+`notebooks/stichprobe.ipynb` draws a random sample from a set (`LONDON_SET` points it at one, by default the evaluation set), runs the validator on every sampled photo and shows it with its label and the verdict, so the numbers in the evaluation can be checked by eye.
+
+The 240 real photos behind `notebooks/real_photos.ipynb` come from Open Images (Flickr, CC BY 2.0) and are built by `scripts/build_openimages_set.py` from Google's metadata; `credits.csv` next to them lists each photo's author and licence.
 
 ## Not maintained
 
