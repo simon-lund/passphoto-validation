@@ -64,6 +64,35 @@ class RuleResult:
     note: Optional[str] = None
 
 
+ProblemStatus = Literal["fail", "warn", "skipped", "error"]
+"""Status of a problem: that of the check that caused it (fail and warn: it found something; skipped and
+error: it could not judge the photo)."""
+
+
+@dataclass
+class Problem:
+    """One cause behind the rules that did not pass: a check that did not pass, with the rules it decided.
+
+    The rules are grouped by cause, so one defect reads as one problem however many rules it breaks
+    (glare fails no_reflections and glasses_no_reflections; a small head fails face_size, face_height_mm
+    and template_zones). core/rules.py derives the list (evaluate_problems).
+
+    - check, status, reasons: the check, as in `checks`.
+    - headline: the first sentence of the first reason, for a one-line view.
+    - rules: the rules whose status this check set: among the rules it covers, the ones at its status (a
+      rule two failing checks break is listed under both; a warning under a rule another check fails
+      lists none), or, for a skipped or crashed check, the ones it left skipped.
+    - not_judged: rules skipped because this check's failure stopped the checks that cover them
+      (CHECK_DEPENDENCIES in core/validator.py; the face gate stops every check).
+    """
+    check: str
+    status: ProblemStatus
+    headline: str
+    reasons: List[str] = field(default_factory=list)
+    rules: List[str] = field(default_factory=list)
+    not_judged: List[str] = field(default_factory=list)
+
+
 CropStatus = Literal["not_needed", "not_possible", "proposed"]
 
 
@@ -133,6 +162,9 @@ class PassportPhotoReport:
     skipped_rules: List[str] = field(default_factory=list)
     # The 35x45 crop for framing problems; None when cropping is turned off. Never changes is_valid.
     crop: Optional[Crop] = None
+    # The rules that did not pass, grouped by the check that caused it: fails, warnings, then what could not
+    # be judged. Derived from checks and rules; a photo where every rule passes has none.
+    problems: List[Problem] = field(default_factory=list)
 
     def to_dict(self):
         """Convert report to a dictionary, suitable for JSON serialization."""

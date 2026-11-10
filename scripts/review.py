@@ -212,6 +212,7 @@ def verdict(report) -> dict:
         skipped_rules=list(report.skipped_rules),
         rules=[dict(id=r.id, title=r.title, status=r.status, reasons=r.reasons, checks=list(r.checks)) for r in report.rules],
         checks=[dict(name=c.name, status=c.status, reasons=c.reasons, measurements=numbers(c.measurements)) for c in report.checks],
+        problems=[asdict(p) for p in report.problems],
         crop=asdict(report.crop) if report.crop is not None else None,
     )
 

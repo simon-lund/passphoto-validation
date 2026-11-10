@@ -14,7 +14,7 @@ from .config import ValidatorConfig
 from .crop import FRAMING_CHECKS, plan_crop
 from .models import CheckResult, CheckSkipped, Crop, PassportPhotoReport, ValidationIssue, ValidationContext
 from .ofiq import PARSING_LABELS, load_engine
-from .rules import evaluate_rules
+from .rules import evaluate_problems, evaluate_rules
 from .thresholds import apply_overrides, disabled_in, is_off, load_overrides, parameters, thresholds
 
 logger = logging.getLogger(__name__)
@@ -23,6 +23,27 @@ logger = logging.getLogger(__name__)
 mp_face_detection = mp.solutions.face_detection
 mp_face_mesh = mp.solutions.face_mesh
 mp_selfie_segmentation = mp.solutions.selfie_segmentation
+
+# Checks that cannot measure once another check has failed. When the root (the key) fails, the checks listed
+# under it are not run: each ends as skipped with the reason "Not judged: <the root's first reason>", a rule
+# only such checks cover ends as skipped with that reason (the photo is not valid anyway, since the root
+# fails), and the report's problem for the root lists those rules as not_judged. A root that warns, is
+# skipped or crashes stops nothing. The root still runs in list order for the report, but it is measured
+# before the first check that depends on it (see _run_checks). Names only: registered_checks() keeps the
+# check list and its order, which are part of the API contract.
+#
+# Covered eyes (dark lenses, hair, a frame) leave the eye checks nothing to measure: gaze and red_eyes would
+# read the lenses, ofiq_eyes_open lids it cannot see, glasses_glare and the SigLIP checks a lens surface,
+# colour_cast the dark lenses as eye whites, and glasses_tint judges what already fails ofiq_eyes_visible.
+CHECK_DEPENDENCIES: Dict[str, Tuple[str, ...]] = {
+    'ofiq_eyes_visible': ('ofiq_eyes_open', 'gaze', 'red_eyes', 'glasses_tint', 'glasses_glare',
+                          'siglip_glasses_glare', 'siglip_gaze', 'colour_cast'),
+}
+
+
+def _not_judged(root: CheckResult) -> str:
+    """The reason of a check left out because `root` failed."""
+    return f'Not judged: {root.reasons[0] if root.reasons else root.name + " failed."}'
 
 
 class PassportPhotoValidator:
@@ -144,8 +165,48 @@ class PassportPhotoValidator:
         # Run checks
         # Note: Checks update the context with issues and measurements in place
         results = [CheckResult(name='face_detected', status='pass')]
-        results += [self._run_check(context, name, check, kwargs) for name, check, kwargs in self._checks()]
+        results += self._run_checks(context)
         return self._generate_report(context, results), context
+
+    def _run_checks(self, context: ValidationContext) -> List[CheckResult]:
+        """Run every check and return the results in list order.
+
+        A root check (CHECK_DEPENDENCIES) is measured before the first check that depends on it, so that
+        check can be left out when the root has failed; the results, the issues and the measurements still
+        come out in list order, as if nothing had moved.
+        """
+        checks = {name: (check, kwargs) for name, check, kwargs in self._checks()}
+        root_of = {name: root for root, dependents in CHECK_DEPENDENCIES.items() for name in dependents}
+        results: Dict[str, CheckResult] = {}
+
+        def run(name: str) -> CheckResult:
+            if name not in results:
+                root = run(root_of[name]) if root_of.get(name) in checks else None
+                if root is not None and root.status == 'fail':
+                    results[name] = CheckResult(name=name, status='skipped', reasons=[_not_judged(root)])
+                else:
+                    check, kwargs = checks[name]
+                    results[name] = self._run_check(context, name, check, kwargs)
+            return results[name]
+
+        for name in checks:
+            run(name)
+        ordered = [results[name] for name in checks]
+
+        # A root measured early put its issues and measurements before its turn; restore the list order
+        position = {name: i for i, name in enumerate(checks)}
+        context.issues.sort(key=lambda issue: position.get(issue.check, -1))
+        measurements = {}
+        for result in ordered:
+            for key in result.measurements:
+                measurements.setdefault(key, context.measurements[key])
+        measurements.update({key: value for key, value in context.measurements.items() if key not in measurements})
+        context.measurements = measurements
+        return ordered
+
+    def _dependencies(self) -> Dict[str, Tuple[str, ...]]:
+        """CHECK_DEPENDENCIES plus the face gate, which stops every other check; for the report's problems."""
+        return {'face_detected': tuple(name for name, _, _ in self._checks()), **CHECK_DEPENDENCIES}
 
     def _checks(self) -> List[Tuple[str, Callable, Dict]]:
         """All checks that run once exactly one face is found, as (name, function, keyword arguments)."""
@@ -172,7 +233,8 @@ class PassportPhotoValidator:
 
         The names are part of the API contract (rules refer to them): add new ones, never rename. The
         thresholds come from core/thresholds.py, which also says where each number came from; a check
-        without an entry there runs with its function's defaults.
+        without an entry there runs with its function's defaults. CHECK_DEPENDENCIES says which of these
+        checks are left out once another has failed.
         """
         checks = [
             ('resolution', quality.check_resolution,
@@ -409,6 +471,7 @@ class PassportPhotoValidator:
         total_deduction = sum(issue.severity for issue in context.issues)
         score = max(0, 100 - total_deduction)
         rules = evaluate_rules(checks, disabled=self.disabled)
+        problems = evaluate_problems(checks, rules, self._dependencies())
         # Valid only if no check found an error, none crashed, and every rule that has checks could be judged
         skipped_rules = [rule.id for rule in rules if rule.status == 'skipped']
         is_valid = (not skipped_rules and not any(issue.category == 'error' for issue in context.issues)
@@ -424,6 +487,7 @@ class PassportPhotoValidator:
             checks=checks,
             rules=rules,
             skipped_rules=skipped_rules,
+            problems=problems,
         )
 
     def __del__(self):

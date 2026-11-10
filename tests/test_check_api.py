@@ -20,6 +20,8 @@ RULE_STATUSES = {'pass', 'warn', 'fail', 'skipped', 'not_checked'}
 
 
 CROP_KEYS = {'status', 'reason', 'x', 'y', 'width', 'height', 'is_valid', 'rules_after', 'fixed_rules', 'remaining_rules'}
+PROBLEM_KEYS = {'check', 'status', 'headline', 'reasons', 'rules', 'not_judged'}
+PROBLEM_ORDER = ['fail', 'warn', 'skipped', 'error']
 
 
 @pytest.fixture(scope='module')
@@ -69,6 +71,18 @@ def test_check_reports_every_check_and_rule(client):
     assert by_name['face_sharpness']['status'] == 'pass'
     assert by_name['exposure']['status'] == 'pass'
 
+    # The problems: the rules that did not pass by the check that caused it, fails first; together they name
+    # every rule that is fail, warn or skipped, and nothing else
+    problems = body['problems']
+    assert problems and all(set(problem) == PROBLEM_KEYS for problem in problems)
+    assert {problem['check'] for problem in problems} <= set(names)
+    assert [problem['status'] for problem in problems] == sorted((p['status'] for p in problems), key=PROBLEM_ORDER.index)
+    named = {rule_id for problem in problems for rule_id in problem['rules'] + problem['not_judged']}
+    assert named == {rule['id'] for rule in body['rules'] if rule['status'] in ('fail', 'warn', 'skipped')}
+    # A square photo: the format is the first problem, and it is one problem, not one per rule
+    assert problems[0]['check'] == 'photo_format' and problems[0]['rules'] == ['photo_format']
+    assert problems[0]['headline'] == by_name['photo_format']['reasons'][0]
+
 
 def test_photo_without_face_fails_the_gate_and_skips_the_rest(client):
     response = _post(client, _png(Image.new('RGB', (700, 900), (200, 200, 200))), 'grey.png', 'image/png')
@@ -77,7 +91,12 @@ def test_photo_without_face_fails_the_gate_and_skips_the_rest(client):
 
     assert checks[0] == {'name': 'face_detected', 'status': 'fail', 'reasons': ['No face detected'], 'measurements': {}}
     assert {check['status'] for check in checks[1:]} == {'skipped'}
-    CheckReport.model_validate(response.json())
+    body = response.json()
+    CheckReport.model_validate(body)
+    # One problem: the gate, which breaks face_visible and leaves every other rule unjudged
+    assert body['problems'] == [{'check': 'face_detected', 'status': 'fail', 'headline': 'No face detected',
+                                 'reasons': ['No face detected'], 'rules': ['face_visible'], 'not_judged': body['skipped_rules']}]
+    assert len(body['skipped_rules']) == len(RULES) - 1
 
 
 def test_non_image_is_rejected_with_a_code(client):
@@ -101,6 +120,7 @@ def test_openapi_describes_the_answers(client):
         assert responses[status]['content']['application/json']['schema'] == {'$ref': '#/components/schemas/ErrorResponse'}
     crop = spec['components']['schemas']['Crop']['properties']
     assert set(crop) == CROP_KEYS
+    assert set(spec['components']['schemas']['Problem']['properties']) == PROBLEM_KEYS
 
 
 def test_errors_match_the_published_model(client):
