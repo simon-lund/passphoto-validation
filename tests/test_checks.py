@@ -13,7 +13,6 @@ import pytest
 from PIL import Image
 
 from passphoto_validation.core import PassportPhotoValidator
-from passphoto_validation.core.checks import geometry
 from passphoto_validation.core.config import ValidatorConfig
 from passphoto_validation.core.models import Crop
 from passphoto_validation.core.utils import convert_to_bgr
@@ -304,8 +303,10 @@ def test_photo_with_a_crashed_check_is_not_valid(validator, id_photo, monkeypatc
     def crash(context):
         raise ValueError('boom')
 
-    # face_centered shares the template_zones rule with face_size, which passes
-    monkeypatch.setattr(geometry, 'check_face_centered', crash)
+    # face_centered shares the template_zones rule with face_size, which passes. The validator resolves its
+    # check list once, when it is built, so the crash goes into that list
+    with_crash = [(name, crash if name == 'face_centered' else check, kwargs) for name, check, kwargs in validator._checks()]
+    monkeypatch.setattr(validator, '_check_list', with_crash)
     report = validator(id_photo)
     checks = {check.name: check for check in report.checks}
     assert checks['face_centered'].status == 'error' and checks['face_size'].status == 'pass'
