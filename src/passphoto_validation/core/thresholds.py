@@ -50,8 +50,8 @@ THRESHOLDS: Dict[str, Thresholds] = {
     'contrast': Thresholds(
         dict(warn_below=40, fail_below=30),
         'Standard deviation of the grey levels: compliant crops never below 42, the low-contrast variant never '
-        'above 25, the darkened one 29; 95% of real candid photos above 41. Fails since the review of 2026-11-10: '
-        'a grey photo is not a valid photo'),
+        'above 25, the darkened one 29; 95% of real candid photos above 41 (1 of 223 fails, 4% warn). Fails since '
+        'the review of 2026-11-10: a grey photo is not a valid photo'),
     'exposure': Thresholds(
         dict(warn_below=75, fail_below=60),
         'L* of the brightest 1% (the background), so dark skin is not read as underexposed; the darkened variant fails'),
@@ -99,8 +99,8 @@ THRESHOLDS: Dict[str, Thresholds] = {
         dict(warn_share_above=0.015, fail_share_above=0.025, chroma_distance=30),
         'Patches of the lower face more than 30 CIELAB chroma units from the skin, at least as saturated: 0 on '
         'every London crop (plain, glasses, sunglasses, cast, shadow), 3% or more of the face oval with the '
-        'sticker variant (face_stickers); of 223 real candid photos 5 exceed 2.5% (a clown nose, goggles, face '
-        'paint) and 2% more warn. Fails since the review of 2026-11-10: a filter\'s stickers make the photo invalid'),
+        'sticker variant (face_stickers); of 223 real candid photos 4 fail (a clown nose, goggles, face paint) '
+        'and 1 more warns. Fails since the review of 2026-11-10: a filter\'s stickers make the photo invalid'),
     # Eyes
     'gaze': Thresholds(
         dict(warn_above=0.08, fail_above=0.15),
