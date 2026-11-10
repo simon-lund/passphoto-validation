@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review</title>
+<style>
+  :root {
+    --mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+    --paper: oklch(0.985 0.003 250);
+    --panel: oklch(0.952 0.005 250);
+    --line: oklch(0.85 0.007 250);
+    --ink: oklch(0.21 0.012 250);
+    --muted: oklch(0.47 0.012 250);
+    --fail: oklch(0.55 0.2 28);
+    --on-fail: oklch(0.985 0.003 250);
+    --warn: oklch(0.84 0.15 82);
+    --on-warn: oklch(0.21 0.012 250);
+    --pass: oklch(0.91 0.055 150);
+    --on-pass: oklch(0.33 0.08 150);
+    --err: oklch(0.43 0.19 300);
+    --on-err: oklch(0.985 0.003 250);
+    --face: oklch(0.55 0.22 262);
+    --crop: oklch(0.58 0.23 335);
+    --whites: oklch(0.6 0.17 150);
+    --ofiq: oklch(0.62 0.18 60);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: oklch(0.17 0.008 250);
+      --panel: oklch(0.215 0.01 250);
+      --line: oklch(0.33 0.012 250);
+      --ink: oklch(0.93 0.006 250);
+      --muted: oklch(0.71 0.01 250);
+      --fail: oklch(0.68 0.19 28);
+      --on-fail: oklch(0.15 0.01 250);
+      --warn: oklch(0.8 0.15 82);
+      --on-warn: oklch(0.15 0.01 250);
+      --pass: oklch(0.31 0.06 150);
+      --on-pass: oklch(0.89 0.08 150);
+      --err: oklch(0.72 0.15 300);
+      --on-err: oklch(0.15 0.01 250);
+      --face: oklch(0.72 0.16 262);
+      --crop: oklch(0.74 0.18 335);
+      --whites: oklch(0.78 0.15 150);
+      --ofiq: oklch(0.78 0.15 60);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--paper); color: var(--ink); font: 13px/1.45 var(--mono); font-variant-numeric: tabular-nums;
+         display: flex; flex-direction: column; }
+  h1, h2, p { margin: 0; }
+  button, textarea { font: inherit; color: inherit; }
+  .label { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+  .muted { color: var(--muted); }
+  .small { font-size: 11.5px; }
+  kbd { font: inherit; font-size: 10px; padding: 0 4px; border: 1px solid currentColor; opacity: 0.75; margin-left: 4px; }
+
+  .st { display: inline-block; min-width: 6ch; padding: 1px 5px; border: 1px solid var(--ink); text-align: center;
+        font-size: 11px; font-weight: 700; letter-spacing: 0.06em; line-height: 1.35; white-space: nowrap; }
+  .st[data-status="fail"] { background: var(--fail); color: var(--on-fail); }
+  .st[data-status="warn"] { background: var(--warn); color: var(--on-warn); }
+  .st[data-status="pass"] { background: var(--pass); color: var(--on-pass); }
+  .st[data-status="error"] { background: var(--err); color: var(--on-err); }
+  .st[data-status="skipped"] { background: repeating-linear-gradient(135deg, var(--paper) 0 3px, var(--line) 3px 5px); color: var(--ink); }
+  .st[data-status="not_checked"] { background: transparent; color: var(--muted); border-style: dashed; }
+
+  .bar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 4px 24px;
+         padding: 6px 16px; background: var(--ink); color: var(--paper); }
+  .bar .label { opacity: 0.8; margin-right: 8px; }
+  .bar .count { font-weight: 700; }
+
+  main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 440px; gap: 2px; background: var(--ink); min-height: 0; }
+  @media (max-width: 960px) { main { grid-template-columns: minmax(0, 1fr); } }
+  .stage { background: var(--paper); display: flex; flex-direction: column; min-height: 0; }
+  .layers { display: flex; flex-wrap: wrap; gap: 2px 14px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+  .layers label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; white-space: nowrap; }
+  .layers input { margin: 0; }
+  .layers .swatch { display: inline-block; width: 10px; height: 10px; border: 1.5px solid var(--c); }
+  .canvas-wrap { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; min-height: 0; padding: 10px;
+                 touch-action: pan-y; }
+  canvas { max-width: 100%; max-height: 100%; background: var(--panel); }
+  .message { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center;
+             padding: 24px; background: color-mix(in oklab, var(--paper) 80%, transparent); }
+  .message[hidden] { display: none; }
+  .message .box { max-width: 48ch; }
+  .meta { padding: 4px 12px 8px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 2px 18px; }
+
+  .panel { background: var(--paper); display: flex; flex-direction: column; min-height: 0; overflow: auto; }
+  .panel > * { padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .panel > *:last-child { border-bottom: 0; }
+  .expect .value { font-weight: 700; }
+  .stamp { font-size: 30px; font-weight: 800; line-height: 1; letter-spacing: -0.02em; text-transform: uppercase; padding: 14px; }
+  .stamp[data-status="fail"] { background: var(--fail); color: var(--on-fail); }
+  .stamp[data-status="pass"] { background: var(--pass); color: var(--on-pass); }
+  .stamp .label { display: block; margin-bottom: 8px; }
+  .stamp .sub { display: block; margin-top: 8px; font-size: 11.5px; font-weight: 400; letter-spacing: 0; text-transform: none; }
+
+  .rules { display: flex; flex-direction: column; gap: 6px; }
+  .rule { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; align-items: start; text-align: left;
+          padding: 6px 8px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; }
+  .rule:hover { border-color: var(--ink); }
+  .rule:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+  .rule .title { font-weight: 700; }
+  .rule .reasons { grid-column: 2 / 4; }
+  .rule .mark { color: var(--muted); white-space: nowrap; }
+  .rule .mark .when-on, .rule[aria-pressed="true"] .mark .when-off { display: none; }
+  .rule[aria-pressed="true"] { border: 2px solid var(--ink); }
+  .rule[aria-pressed="true"] .title, .rule[aria-pressed="true"] .reasons { text-decoration: line-through; }
+  .rule[aria-pressed="true"] .mark { color: var(--ink); font-weight: 700; }
+  .rule[aria-pressed="true"] .mark .when-on { display: inline; }
+  .rules .none { padding: 4px 0; }
+
+  details summary { cursor: pointer; }
+  table { border-collapse: collapse; width: 100%; margin-top: 6px; }
+  th, td { text-align: left; vertical-align: top; padding: 2px 6px 2px 0; }
+  th { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+  td.m { color: var(--muted); font-size: 11px; }
+
+  textarea { width: 100%; margin-top: 4px; padding: 6px; border: 1px solid var(--ink); background: var(--panel); resize: vertical; }
+  textarea:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+  .decide { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .decide button, .nav button { padding: 12px 8px; border: 2px solid var(--ink); background: var(--paper); cursor: pointer;
+                                font-weight: 700; font-size: 14px; letter-spacing: 0.02em; }
+  .decide button:hover, .nav button:hover { background: var(--ink); color: var(--paper); }
+  .decide button:focus-visible, .nav button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  #btn-wrong { border-color: var(--fail); }
+  #btn-wrong:hover { background: var(--fail); color: var(--on-fail); }
+  .nav { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .nav button { padding: 6px 8px; font-weight: 400; font-size: 12px; border-width: 1px; }
+  .status { min-height: 2.6em; }
+  .done { padding: 40px 24px; max-width: 60ch; margin: 0 auto; }
+  .done h1 { font-size: 24px; margin-bottom: 12px; }
+  .done p { margin-top: 8px; }
+  .done code { background: var(--panel); padding: 1px 4px; }
+</style>
+</head>
+<body>
+<header class="bar">
+  <div><span class="label">Review</span><span id="set"></span></div>
+  <div id="progress"><span class="muted">loading</span></div>
+  <div class="small">Y / → right · N / ← wrong · C comment · click a rule to mark it wrong · S skip · B back · 1-9 layers</div>
+</header>
+
+<main id="main">
+  <section class="stage" id="stage">
+    <div class="layers" id="layers"></div>
+    <div class="canvas-wrap">
+      <canvas id="canvas" width="10" height="10"></canvas>
+      <div class="message" id="message"><div class="box" id="message-text">Loading the queue.</div></div>
+    </div>
+    <div class="meta small muted" id="meta"></div>
+  </section>
+
+  <aside class="panel">
+    <div class="expect" id="expect"></div>
+    <div class="stamp" id="stamp" data-status="pass"><span class="label">Verdict</span><span id="stamp-text">…</span><span class="sub" id="stamp-sub"></span></div>
+    <div class="rules" id="rules"></div>
+    <details id="checks-details"><summary class="label">All checks</summary><table id="checks-table"></table></details>
+    <div>
+      <label class="label" for="comment">Comment <kbd>C</kbd></label>
+      <textarea id="comment" rows="3" placeholder="What the pipeline got wrong, or what you see. Esc leaves the field."></textarea>
+    </div>
+    <div class="decide">
+      <button id="btn-wrong" type="button">✗ Wrong<kbd>N</kbd></button>
+      <button id="btn-right" type="button">✓ Right<kbd>Y</kbd></button>
+    </div>
+    <div class="nav">
+      <button id="btn-back" type="button">← Back<kbd>B</kbd></button>
+      <button id="btn-skip" type="button">Skip →<kbd>S</kbd></button>
+    </div>
+    <div class="status small muted" id="status"></div>
+  </aside>
+</main>
+
+<section class="done" id="done" hidden></section>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  // Layers: key, name, colour token, default; each draws from the overlays the server sends
+  const LAYERS = [
+    { key: '1', id: 'mask', name: 'person mask', colour: '--ink', on: true },
+    { key: '2', id: 'band', name: 'band next to the person', colour: '--muted', on: false },
+    { key: '3', id: 'face', name: 'face box, crown, chin', colour: '--face', on: true },
+    { key: '4', id: 'mesh', name: 'face mesh', colour: '--muted', on: false },
+    { key: '5', id: 'eyes', name: 'eyes and irises', colour: '--face', on: true },
+    { key: '6', id: 'whites', name: 'eye whites', colour: '--whites', on: true },
+    { key: '7', id: 'ofiq', name: 'OFIQ landmarks', colour: '--ofiq', on: false },
+    { key: '8', id: 'parsing', name: 'OFIQ face parsing', colour: '--ofiq', on: false },
+    { key: '9', id: 'crop', name: 'planned crop', colour: '--crop', on: true },
+  ];
+  const layerState = {};
+  try {
+    const saved = JSON.parse(localStorage.getItem('review-layers') || '{}');
+    for (const layer of LAYERS) layerState[layer.id] = layer.id in saved ? !!saved[layer.id] : layer.on;
+  } catch (e) { for (const layer of LAYERS) layerState[layer.id] = layer.on; }
+
+  const state = { queue: null, i: 0, item: null, image: null, parsingImage: null, wrong: new Set(), history: [], counts: { right: 0, wrong: 0 } };
+
+  // --- Layers bar
+  const layersBox = $('layers');
+  for (const layer of LAYERS) {
+    const label = document.createElement('label');
+    label.innerHTML = `<input type="checkbox"> <span class="swatch" style="--c: var(${layer.colour})"></span> ${layer.name}<kbd>${layer.key}</kbd>`;
+    const input = label.querySelector('input');
+    input.checked = layerState[layer.id];
+    input.addEventListener('change', () => { layerState[layer.id] = input.checked; saveLayers(); draw(); });
+    layer.input = input;
+    layersBox.appendChild(label);
+  }
+  function saveLayers() { try { localStorage.setItem('review-layers', JSON.stringify(layerState)); } catch (e) {} }
+  function toggleLayer(key) {
+    const layer = LAYERS.find((l) => l.key === key);
+    if (!layer) return;
+    layer.input.checked = !layer.input.checked;
+    layerState[layer.id] = layer.input.checked; saveLayers(); draw();
+  }
+
+  // --- Drawing
+  const canvas = $('canvas'); const ctx = canvas.getContext('2d');
+  function fit() {
+    if (!state.image) return 1;
+    const wrap = canvas.parentElement;
+    const maxW = wrap.clientWidth - 20, maxH = wrap.clientHeight - 20;
+    return Math.min(maxW / state.image.naturalWidth, maxH / state.image.naturalHeight, 1.5);
+  }
+  function draw() {
+    if (!state.item || !state.image || state.item.error) return;
+    const s = fit();
+    const w = Math.round(state.image.naturalWidth * s), h = Math.round(state.image.naturalHeight * s);
+    canvas.width = w; canvas.height = h;
+    ctx.drawImage(state.image, 0, 0, w, h);
+    const o = state.item.overlays || {};
+    const poly = (points, colour, width, dash, fill) => {
+      if (!points || !points.length) return;
+      ctx.save(); ctx.strokeStyle = colour; ctx.lineWidth = width; ctx.setLineDash(dash || []);
+      for (const ring of points) {
+        ctx.beginPath();
+        ring.forEach(([x, y], k) => (k ? ctx.lineTo(x * s, y * s) : ctx.moveTo(x * s, y * s)));
+        ctx.closePath();
+        if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+        ctx.stroke();
+      }
+      ctx.restore();
+    };
+    const dots = (points, colour, r) => {
+      if (!points) return;
+      ctx.save(); ctx.fillStyle = colour;
+      for (const [x, y] of points) { ctx.beginPath(); ctx.arc(x * s, y * s, r, 0, Math.PI * 2); ctx.fill(); }
+      ctx.restore();
+    };
+    if (layerState.parsing && state.parsingImage) { ctx.save(); ctx.globalAlpha = 0.45; ctx.drawImage(state.parsingImage, 0, 0, w, h); ctx.restore(); }
+    if (layerState.band) poly(o.band, css('--muted'), 1, [4, 3]);
+    if (layerState.mask) poly(o.mask, css('--ink'), 1.5);
+    if (layerState.mesh) dots(o.mesh, css('--muted'), 1);
+    if (layerState.face) {
+      ctx.save(); ctx.strokeStyle = css('--face'); ctx.lineWidth = 1.5;
+      if (o.face_box) ctx.strokeRect(o.face_box.x * s, o.face_box.y * s, o.face_box.width * s, o.face_box.height * s);
+      ctx.setLineDash([6, 4]);
+      for (const y of [o.crown_y, o.chin_y]) if (y != null) { ctx.beginPath(); ctx.moveTo(0, y * s); ctx.lineTo(w, y * s); ctx.stroke(); }
+      ctx.restore();
+    }
+    if (layerState.eyes) {
+      poly(o.eyes, css('--face'), 1.2);
+      if (o.irises) { ctx.save(); ctx.strokeStyle = css('--face'); ctx.lineWidth = 1.2;
+        for (const c of o.irises) { ctx.beginPath(); ctx.arc(c.x * s, c.y * s, c.r * s, 0, Math.PI * 2); ctx.stroke(); } ctx.restore(); }
+    }
+    if (layerState.whites) poly(o.eye_whites, css('--whites'), 1, [], 'color-mix(in oklab, ' + css('--whites') + ' 35%, transparent)');
+    if (layerState.ofiq) dots(o.ofiq_landmarks, css('--ofiq'), 2);
+    if (layerState.crop && o.crop_box) { ctx.save(); ctx.strokeStyle = css('--crop'); ctx.lineWidth = 2;
+      ctx.strokeRect(o.crop_box.x * s, o.crop_box.y * s, o.crop_box.width * s, o.crop_box.height * s); ctx.restore(); }
+  }
+  window.addEventListener('resize', draw);
+
+  // --- The card
+  const message = $('message'), messageText = $('message-text');
+  function showMessage(text) { messageText.textContent = text; message.hidden = false; }
+  function hideMessage() { message.hidden = true; }
+  const esc = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  function progress() {
+    const n = state.queue.items.length;
+    $('progress').innerHTML = `<span class="count">${Math.min(state.i + 1, n)}</span> / ${n}` +
+      ` <span class="muted">·</span> ✓ <span class="count">${state.counts.right || 0}</span>` +
+      ` <span class="muted">·</span> ✗ <span class="count">${state.counts.wrong || 0}</span>`;
+  }
+
+  async function show(i) {
+    state.i = i; progress();
+    if (i >= state.queue.items.length) return finish();
+    const entry = state.queue.items[i];
+    state.item = null; state.image = null; state.parsingImage = null; state.wrong.clear();
+    $('comment').value = '';
+    expect(entry);
+    showMessage(`Computing ${entry.file} …`);
+    $('stamp').dataset.status = 'pass'; $('stamp-text').textContent = '…'; $('stamp-sub').textContent = '';
+    $('rules').innerHTML = ''; $('checks-table').innerHTML = ''; $('meta').textContent = entry.file;
+    let item;
+    try {
+      const r = await fetch(`/api/item/${i}`);
+      item = await r.json();
+      if (!r.ok) throw new Error(item.detail || r.statusText);
+    } catch (e) { item = { i, file: entry.file, error: String(e) }; }
+    if (state.i !== i) return;  // the user moved on
+    state.item = item;
+    if (item.error) {
+      showMessage(`The pipeline crashed on ${entry.file}: ${item.error}. Skip it (S) or go back (B).`);
+      $('stamp').dataset.status = 'fail'; $('stamp-text').textContent = 'crashed';
+      return;
+    }
+    const image = new Image();
+    image.onload = () => { if (state.i !== i) return; state.image = image; hideMessage(); draw(); };
+    image.src = `/api/photo/${i}`;
+    if (item.overlays && item.overlays.parsing) {
+      const parsing = new Image();
+      parsing.onload = () => { if (state.i !== i) return; state.parsingImage = parsing; draw(); };
+      parsing.src = 'data:image/png;base64,' + item.overlays.parsing;
+    }
+    verdict(item, entry);
+    $('meta').innerHTML = `${esc(entry.file)} · ${item.width}×${item.height} px · ${item.seconds} s` +
+      (entry.credit ? ` · ${esc(entry.credit)}` : '');
+  }
+
+  function expect(entry) {
+    const parts = [];
+    if (entry.variant) parts.push(`<span class="label">Label</span> <span class="value">${esc(entry.variant)}</span>`);
+    if (entry.broken_rule) parts.push(`breaks <span class="value">${esc(entry.broken_rule)}</span> <span class="muted">(${esc(entry.broken_rule_title)})</span>`);
+    else if (entry.variant) parts.push('<span class="muted">should pass</span>');
+    if (entry.note) parts.push(`<div class="muted small">${esc(entry.note)}</div>`);
+    if (entry.reviewed === true || entry.reviewed === false) parts.push(`<div class="small">answered before: ${entry.reviewed ? '✓ right' : '✗ wrong'}</div>`);
+    $('expect').innerHTML = parts.length ? parts.join(' ') : '<span class="muted">No label for this photo.</span>';
+  }
+
+  const ORDER = { fail: 0, skipped: 1, warn: 2, pass: 3, not_checked: 4 };
+  function verdict(item, entry) {
+    const v = item.verdict;
+    const stamp = $('stamp');
+    stamp.dataset.status = v.is_valid ? 'pass' : 'fail';
+    $('stamp-text').textContent = v.is_valid ? 'Valid' : 'Not valid';
+    const crop = v.crop;
+    let sub = '';
+    if (crop && crop.status === 'proposed') sub = `Crop ${crop.width}×${crop.height} fixes ${crop.fixed_rules.length} rule(s); cropped photo ${crop.is_valid ? 'valid' : 'not valid'}.`;
+    else if (crop && crop.status === 'not_possible') sub = `No crop possible: ${crop.reason}`;
+    $('stamp-sub').textContent = sub;
+
+    const rules = v.rules.filter((r) => r.status !== 'pass' && r.status !== 'not_checked').sort((a, b) => ORDER[a.status] - ORDER[b.status]);
+    const box = $('rules'); box.innerHTML = '';
+    for (const rule of rules) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'rule'; b.dataset.rule = rule.id; b.setAttribute('aria-pressed', 'false');
+      b.title = 'Click when this rule\'s status is wrong';
+      b.innerHTML = `<span class="st" data-status="${rule.status}">${rule.status}</span><span class="title">${esc(rule.title)}</span>` +
+        `<span class="mark small"><span class="when-off">mark wrong</span><span class="when-on">✗ wrong</span></span>` +
+        `<span class="reasons small muted">${esc(rule.reasons.join(' ')) || esc(rule.id)}</span>`;
+      b.addEventListener('click', () => {
+        const on = b.getAttribute('aria-pressed') !== 'true';
+        b.setAttribute('aria-pressed', String(on));
+        if (on) state.wrong.add(rule.id); else state.wrong.delete(rule.id);
+        status(state.wrong.size ? `${state.wrong.size} rule(s) marked wrong.` : '');
+      });
+      box.appendChild(b);
+    }
+    const passes = v.rules.filter((r) => r.status === 'pass').length;
+    const none = document.createElement('div'); none.className = 'none small muted';
+    none.textContent = rules.length ? `${passes} rules pass.` : `Every rule passes (${passes}).`;
+    box.appendChild(none);
+
+    const table = $('checks-table');
+    table.innerHTML = '<tr><th>check</th><th>status</th><th>measured</th></tr>' + v.checks.map((c) => {
+      const m = Object.entries(c.measurements || {}).map(([k, val]) => `${esc(k)}=${esc(val)}`).join(' ');
+      return `<tr><td>${esc(c.name)}</td><td><span class="st" data-status="${c.status}">${c.status}</span></td><td class="m">${esc(c.reasons.join(' '))} ${m}</td></tr>`;
+    }).join('');
+  }
+
+  function status(text) { $('status').textContent = text; }
+
+  // --- Answers
+  async function decide(agree) {
+    if (!state.item || state.item.error) return;
+    const v = state.item.verdict;
+    const body = {
+      i: state.i, file: state.item.file, agree, wrong_rules: [...state.wrong], comment: $('comment').value,
+      verdict: {
+        is_valid: v.is_valid,
+        failed: v.rules.filter((r) => r.status === 'fail').map((r) => r.id),
+        warned: v.rules.filter((r) => r.status === 'warn').map((r) => r.id),
+        skipped: v.skipped_rules,
+      },
+    };
+    try {
+      const r = await fetch('/api/review', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const answer = await r.json();
+      if (!r.ok) throw new Error(answer.detail || r.statusText);
+      state.counts = answer.counts;
+    } catch (e) { status(`Could not save the answer: ${e}`); return; }
+    state.history.push(state.i);
+    status(`${agree ? '✓ right' : '✗ wrong'} saved for ${state.item.file}.`);
+    show(state.i + 1);
+  }
+  function skip() { if (!state.queue) return; state.history.push(state.i); show(state.i + 1); }
+  function back() { if (!state.history.length) return; show(state.history.pop()); }
+
+  function finish() {
+    $('main').hidden = true;
+    const done = $('done'); done.hidden = false;
+    done.innerHTML = `<h1>Done</h1><p>${state.counts.right || 0} verdicts right, ${state.counts.wrong || 0} wrong.</p>` +
+      `<p>The answers are in <code>${esc(state.queue.reviews)}</code>.</p>` +
+      `<p class="muted">Summarise them with <code>uv run python scripts/review.py --set ${esc(state.queue.path)} --summary</code>; a new run leaves the answered photos out.</p>`;
+  }
+
+  // --- Keys and swipes
+  document.addEventListener('keydown', (e) => {
+    const inField = e.target === $('comment');
+    if (inField) { if (e.key === 'Escape') { e.target.blur(); } return; }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const k = e.key;
+    if (k === 'y' || k === 'Y' || k === 'ArrowRight') { e.preventDefault(); decide(true); }
+    else if (k === 'n' || k === 'N' || k === 'ArrowLeft') { e.preventDefault(); decide(false); }
+    else if (k === 's' || k === 'S') { e.preventDefault(); skip(); }
+    else if (k === 'b' || k === 'B') { e.preventDefault(); back(); }
+    else if (k === 'c' || k === 'C') { e.preventDefault(); $('comment').focus(); }
+    else if (k >= '1' && k <= '9') { toggleLayer(k); }
+  });
+  $('btn-right').addEventListener('click', () => decide(true));
+  $('btn-wrong').addEventListener('click', () => decide(false));
+  $('btn-skip').addEventListener('click', skip);
+  $('btn-back').addEventListener('click', back);
+  let touch = null;
+  $('stage').addEventListener('touchstart', (e) => { touch = e.changedTouches[0]; }, { passive: true });
+  $('stage').addEventListener('touchend', (e) => {
+    if (!touch) return;
+    const t = e.changedTouches[0], dx = t.clientX - touch.clientX, dy = t.clientY - touch.clientY; touch = null;
+    if (Math.abs(dx) > 80 && Math.abs(dy) < 60) decide(dx > 0);
+  }, { passive: true });
+
+  // --- Start
+  (async () => {
+    try {
+      const r = await fetch('/api/queue');
+      state.queue = await r.json();
+    } catch (e) { showMessage(`Could not load the queue: ${e}`); return; }
+    state.counts = state.queue.counts || {};
+    const f = state.queue.filters;
+    const filters = [f.split && `split ${f.split}`, f.variant && `variant ${f.variant}`, ...(f.check || []), ...(f.rule || []), f.shuffle && 'shuffled']
+      .filter(Boolean).join(' · ');
+    $('set').textContent = ` ${state.queue.set}${filters ? ' · ' + filters : ''}` +
+      `${state.queue.commit ? ' · ' + state.queue.commit : ''}${state.queue.thresholds_file ? ' · ' + state.queue.thresholds_file : ''}`;
+    show(0);
+  })();
+})();
+</script>
+</body>
+</html>

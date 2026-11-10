@@ -105,6 +105,16 @@ uv run python scripts/make_test_photos.py --source ../datasets/frl-london/neutra
 
 `notebooks/stichprobe.ipynb` draws a random sample from a set (`LONDON_SET` points it at one, by default the evaluation set), runs the validator on every sampled photo and shows it with its label and the verdict, so the numbers in the evaluation can be checked by eye.
 
+To judge the verdicts one photo at a time, `scripts/review.py` serves a local page that shows each photo with what the pipeline saw drawn over it (person mask, face box, eyes, eye whites, OFIQ's landmarks and face parsing, the planned crop), the label, and the verdict with every rule that fails or warns and why. Press Y when the verdict is right, N when it is wrong, click a rule to mark that rule as wrong, add a comment; swipe on a touch screen. The answers go to `reviews.jsonl` next to the set, and `--summary` prints what they say per rule and per variant. `--split`, `--variant`, `--check NAME=STATUS` and `--rule ID=STATUS` narrow the queue to, say, the photos where a check warned:
+
+```bash
+uv run python scripts/review.py --set ../datasets/frl-london-eval --split test --shuffle
+```
+
+```bash
+uv run python scripts/review.py --set ../datasets/frl-london-eval --check colour_cast=warn
+```
+
 The 240 real photos behind `notebooks/real_photos.ipynb` come from Open Images (Flickr, CC BY 2.0) and are built by `scripts/build_openimages_set.py` from Google's metadata; `credits.csv` next to them lists each photo's author and licence.
 
 ## Licence

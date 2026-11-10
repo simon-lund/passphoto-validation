@@ -99,7 +99,18 @@ class PassportPhotoValidator:
             remaining_rules=[rule.id for rule in after.rules if rule.status in ('fail', 'skipped')],
         )
 
+    def inspect(self, image_np: np.ndarray, crop: bool = True) -> Tuple[PassportPhotoReport, ValidationContext]:
+        """Like validate(), and also the ValidationContext of the photo as sent (its masks, landmarks and
+        OFIQ data), for tools that draw what the checks saw. The crop's own context is not kept."""
+        report, context = self._run(image_np)
+        if crop and self.config.autocrop:
+            report.crop = self._crop(image_np, report)
+        return report, context
+
     def _validate(self, image_np: np.ndarray) -> PassportPhotoReport:
+        return self._run(image_np)[0]
+
+    def _run(self, image_np: np.ndarray) -> Tuple[PassportPhotoReport, ValidationContext]:
         context = ValidationContext(image_np=image_np)
 
         # 1. Detect faces and check for exclusion criteria (no faces or multiple faces)
@@ -108,7 +119,7 @@ class PassportPhotoValidator:
 
         if not detections:
             gate = ValidationIssue(category='error', message='No face detected', severity=10, check='face_detected')
-            return self._generate_report(context, self._gate_failed(context, gate, 'No face detected.'))
+            return self._generate_report(context, self._gate_failed(context, gate, 'No face detected.')), context
 
         if len(detections) > 1:
             gate = ValidationIssue(
@@ -119,7 +130,7 @@ class PassportPhotoValidator:
             )
             # We can still populate face_data for the first face to show its bounding box in the report
             self._populate_face_data(context, detections[0])
-            return self._generate_report(context, self._gate_failed(context, gate, 'More than one face detected.'))
+            return self._generate_report(context, self._gate_failed(context, gate, 'More than one face detected.')), context
 
         # Prefill context
         self._populate_face_data(context, detections[0])
@@ -131,7 +142,7 @@ class PassportPhotoValidator:
         # Note: Checks update the context with issues and measurements in place
         results = [CheckResult(name='face_detected', status='pass')]
         results += [self._run_check(context, name, check, kwargs) for name, check, kwargs in self._checks()]
-        return self._generate_report(context, results)
+        return self._generate_report(context, results), context
 
     def _checks(self) -> List[Tuple[str, Callable, Dict]]:
         """All checks that run once exactly one face is found, as (name, function, keyword arguments)."""

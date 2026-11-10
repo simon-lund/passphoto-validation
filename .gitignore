@@ -22,3 +22,6 @@ coverage.xml
 
 # jupyter
 .ipynb_checkpoints/
+
+# the desktop app's launch configs
+/.claude/

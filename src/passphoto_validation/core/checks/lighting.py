@@ -13,8 +13,8 @@ from ..utils import mesh_points
 from .eyes import MP_LEFT_EYE, MP_RIGHT_EYE
 
 # MediaPipe face mesh indices around each eye (the lid contours, 16 points each)
-_RIGHT_EYE_CONTOUR = (33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246)
-_LEFT_EYE_CONTOUR = (362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398)
+RIGHT_EYE_CONTOUR = (33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246)
+LEFT_EYE_CONTOUR = (362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398)
 
 
 def check_exposure_level(context: ValidationContext, warn_below: float, fail_below: float):
@@ -56,12 +56,12 @@ def check_contrast(context: ValidationContext, warn_below: float = 30.0):
         ))
 
 
-def _eye_whites(context: ValidationContext, points: np.ndarray) -> np.ndarray:
+def eye_whites(context: ValidationContext, points: np.ndarray) -> np.ndarray:
     """Mask of the whites of the eyes: inside each lid contour, outside the iris, the lighter half (the
     lids and lashes are darker than the sclera)."""
     lightness = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2LAB)[..., 0]
     whites = np.zeros((context.height, context.width), bool)
-    for contour, eye in ((_RIGHT_EYE_CONTOUR, MP_RIGHT_EYE), (_LEFT_EYE_CONTOUR, MP_LEFT_EYE)):
+    for contour, eye in ((RIGHT_EYE_CONTOUR, MP_RIGHT_EYE), (LEFT_EYE_CONTOUR, MP_LEFT_EYE)):
         region = np.zeros((context.height, context.width), np.uint8)
         cv2.fillPoly(region, [points[list(contour)].round().astype(np.int32)], 1)
         centre = points[eye['iris']]
@@ -99,7 +99,7 @@ def check_colour_cast(context: ValidationContext, warn_above: float, fail_above:
     if background.sum() < 100:
         raise CheckSkipped('No background visible.')
 
-    whites = _eye_whites(context, points)
+    whites = eye_whites(context, points)
     eye_width = np.mean([np.linalg.norm(points[eye['inner']] - points[eye['outer']]) for eye in (MP_RIGHT_EYE, MP_LEFT_EYE)])
     whites_share = float(whites.sum() / max(1.0, eye_width ** 2))
     context.measurements['eye_whites_share'] = whites_share
