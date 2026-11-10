@@ -170,5 +170,5 @@ def test_rules_endpoint_lists_the_catalogue(client):
 def test_thresholds_endpoint_lists_what_the_server_runs_with(client):
     body = client.get('/v1/thresholds').json()
     assert body['file'] is None
-    assert body['checks']['colour_cast'] == dict(warn_above=12, fail_above=20, min_whites_share=0.02, band_share=0.03)
-    assert body['checks']['ofiq_head_yaw'] == dict(warn_above=5, fail_above=10)
+    assert body['checks']['colour_cast'] == dict(enabled=True, warn_above=12, fail_above=20, min_whites_share=0.02, band_share=0.03)
+    assert body['checks']['ofiq_head_yaw'] == dict(enabled=True, warn_above=5, fail_above=10)

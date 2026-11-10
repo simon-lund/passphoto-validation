@@ -1,4 +1,5 @@
 """Background validation checks for passport photos."""
+import math
 from typing import Optional
 
 import cv2
@@ -149,20 +150,20 @@ def _calculate_color_coherence_cov(image, rectangles):
     return 0.0
 
 
-def check_background_brightness(context: ValidationContext, min_brightness: float = 80.0,
+def check_background_brightness(context: ValidationContext, warn_below: float = 80.0,
                                 fail_below: Optional[float] = None, debug: bool = False):
     """
     Check if the background is sufficiently bright.
 
     :param context: The validation context with segmentation data.
-    :param min_brightness: Brightness (0-255) below which the check warns.
+    :param warn_below: Brightness (0-255) below which the check warns.
     :param fail_below: Brightness below which the check fails; None never fails.
     :param debug: If True, returns visualization data.
     """
-    if context.segmentation_mask is None:
+    if context.person_mask_binary is None:
         raise CheckSkipped("No segmentation mask present.")
 
-    background_mask_binary = (context.segmentation_mask < 0.5).astype(np.uint8)
+    background_mask_binary = (context.person_mask_binary == 0).astype(np.uint8)
 
     if np.sum(background_mask_binary) == 0:
         raise CheckSkipped("No background visible.")
@@ -177,7 +178,7 @@ def check_background_brightness(context: ValidationContext, min_brightness: floa
             message=f'Background is dark (brightness: {mean_brightness:.2f}). It must be light, ideally grey.',
             severity=7
         ))
-    elif mean_brightness < min_brightness:
+    elif mean_brightness < warn_below:
         context.issues.append(ValidationIssue(
             category='warning',
             message=f'Background is quite dark (brightness: {mean_brightness:.2f}). Consider using a lighter background.',
@@ -189,19 +190,20 @@ def check_background_brightness(context: ValidationContext, min_brightness: floa
     return None
 
 
-def check_background_uniformity(context: ValidationContext, variance_threshold: float = 200.0, debug: bool = False):
+def check_background_uniformity(context: ValidationContext, fail_above: float = 200.0, warn_above: float = math.inf, debug: bool = False):
     """
     Check for local color uniformity within background regions.
     High within-rectangle variance indicates clutter.
 
     :param context: The validation context with segmentation data.
-    :param variance_threshold: Maximum acceptable within-rectangle color variance.
+    :param fail_above: Within-rectangle colour variance above which it fails.
+    :param warn_above: Variance above which it warns; off by default.
     :param debug: If True, returns visualization data.
     """
-    if context.segmentation_mask is None:
+    if context.person_mask_binary is None:
         raise CheckSkipped("No segmentation mask present.")
 
-    background_mask_binary = (context.segmentation_mask < 0.5).astype(np.uint8)
+    background_mask_binary = (context.person_mask_binary == 0).astype(np.uint8)
     rectangles = _find_background_rectangles(background_mask_binary)
 
     if len(rectangles) < 3:
@@ -212,9 +214,9 @@ def check_background_uniformity(context: ValidationContext, variance_threshold: 
     context.measurements['background_within_rect_variance'] = float(within_rect_variance)
     context.measurements['background_rect_count'] = len(rectangles)
 
-    if within_rect_variance > variance_threshold:
+    if within_rect_variance > fail_above or within_rect_variance > warn_above:
         context.issues.append(ValidationIssue(
-            category='error',
+            category='error' if within_rect_variance > fail_above else 'warning',
             message=f'Background has high local color variation (variance: {within_rect_variance:.2f}), indicating clutter.',
             severity=7
         ))
@@ -245,10 +247,10 @@ def check_background_pattern(context: ValidationContext, warn_above: float, fail
     :param blur_sigma: Gaussian blur (pixels) applied before measuring.
     :param debug: If True, returns visualization data.
     """
-    if context.segmentation_mask is None:
+    if context.person_mask_binary is None:
         raise CheckSkipped("No segmentation mask present.")
 
-    background_mask_binary = (context.segmentation_mask < 0.5).astype(np.uint8)
+    background_mask_binary = (context.person_mask_binary == 0).astype(np.uint8)
     rectangles = _find_background_rectangles(background_mask_binary)
 
     if len(rectangles) < min_rectangles:
@@ -278,20 +280,21 @@ def check_background_pattern(context: ValidationContext, warn_above: float, fail
     return None
 
 
-def check_background_consistency(context: ValidationContext, cov_threshold: float = 0.5, debug: bool = False):
+def check_background_consistency(context: ValidationContext, fail_above: float = 0.5, warn_above: float = math.inf, debug: bool = False):
     """
     Check for consistent color transitions using Coefficient of Variation.
     Smooth gradients have low CoV; cluttered backgrounds have high CoV. So a gradient passes here, and
     check_background_gradient reports it.
 
     :param context: The validation context with segmentation data.
-    :param cov_threshold: Maximum acceptable coefficient of variation.
+    :param fail_above: Coefficient of variation above which it fails.
+    :param warn_above: Coefficient above which it warns; off by default.
     :param debug: If True, returns visualization data.
     """
-    if context.segmentation_mask is None:
+    if context.person_mask_binary is None:
         raise CheckSkipped("No segmentation mask present.")
 
-    background_mask_binary = (context.segmentation_mask < 0.5).astype(np.uint8)
+    background_mask_binary = (context.person_mask_binary == 0).astype(np.uint8)
     rectangles = _find_background_rectangles(background_mask_binary)
 
     if len(rectangles) < 3:
@@ -301,9 +304,9 @@ def check_background_consistency(context: ValidationContext, cov_threshold: floa
     context.measurements['background_color_coherence_cov'] = float(color_coherence_cov)
     context.measurements['background_rect_count'] = len(rectangles)
 
-    if color_coherence_cov > cov_threshold:
+    if color_coherence_cov > fail_above or color_coherence_cov > warn_above:
         context.issues.append(ValidationIssue(
-            category='error',
+            category='error' if color_coherence_cov > fail_above else 'warning',
             message=f'Background has inconsistent color transitions (CoV: {color_coherence_cov:.2f}), indicating non-uniform background.',
             severity=6
         ))
@@ -404,7 +407,9 @@ def _rim_shadow_depth(context: ValidationContext, plane: np.ndarray, residual: n
     segmentation = context.segmentation_mask
     if segmentation is None:
         return 0.0
-    loose = context.person_mask_binary.astype(bool)
+    # The selfie segmentation's own loose mask, not the person mask OFIQ's parsing was joined into: the rim
+    # is where the segmentation is unsure, and hair or clothing the parsing adds is not backdrop
+    loose = segmentation > 0.5
     rim = (loose & ~(segmentation > confidence)) | ((distance > 0) & (distance <= 1))
     lab = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2LAB).astype(np.float32)
     chroma = lab[..., 1:] - 128

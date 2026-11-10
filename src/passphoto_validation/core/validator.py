@@ -1,6 +1,6 @@
 """Passport photo validation business logic."""
 import logging
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Set, Tuple
 
 import cv2
 import mediapipe as mp
@@ -13,9 +13,9 @@ from . import siglip
 from .config import ValidatorConfig
 from .crop import FRAMING_CHECKS, plan_crop
 from .models import CheckResult, CheckSkipped, Crop, PassportPhotoReport, ValidationIssue, ValidationContext
-from .ofiq import load_engine
+from .ofiq import PARSING_LABELS, load_engine
 from .rules import evaluate_rules
-from .thresholds import apply_overrides, load_overrides, parameters, thresholds
+from .thresholds import apply_overrides, disabled_in, is_off, load_overrides, parameters, thresholds
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +36,11 @@ class PassportPhotoValidator:
         """
         self.config = config or ValidatorConfig()
         # The checks and the keyword arguments they run with, resolved once: the thresholds table, then the
-        # deployment's thresholds file on top (a bad file stops the validator here, not on the first photo)
-        self._check_list = self.registered_checks(self.config)
+        # deployment's thresholds file on top (a bad file stops the validator here, not on the first photo).
+        # Checks the file turns off are not run; the rules only they cover end as not_checked
+        self._all_checks = self.registered_checks(self.config)
+        self.disabled = self.disabled_checks(self.config)
+        self._check_list = [check for check in self._all_checks if check[0] not in self.disabled]
 
         self.face_detection = mp_face_detection.FaceDetection(
             min_detection_confidence=self.config.min_detection_confidence
@@ -149,8 +152,18 @@ class PassportPhotoValidator:
         return self._check_list
 
     def parameters(self) -> Dict[str, Dict]:
-        """Every parameter of every check with the value this validator runs with, by check name."""
-        return {name: parameters(check, kwargs) for name, check, kwargs in self._check_list}
+        """Every parameter of every check with the value this validator runs with, by check name, and whether
+        the check is enabled. A level that is off reads False, as in the thresholds file."""
+        return {name: dict(enabled=name not in self.disabled,
+                           **{key: (False if is_off(value) else value) for key, value in parameters(check, kwargs).items()})
+                for name, check, kwargs in self._all_checks}
+
+    @staticmethod
+    def disabled_checks(config: ValidatorConfig) -> Set[str]:
+        """The checks the thresholds file of `config` turns off (`enabled = false`)."""
+        if not config.thresholds_file:
+            return set()
+        return disabled_in(load_overrides(config.thresholds_file), source=config.thresholds_file)
 
     @classmethod
     def registered_checks(cls, config: ValidatorConfig) -> List[Tuple[str, Callable, Dict]]:
@@ -170,7 +183,7 @@ class PassportPhotoValidator:
             ('face_sharpness', quality.check_face_sharpness, thresholds('face_sharpness')),
             ('compression', quality.check_compression_blocks, thresholds('compression')),
             ('exposure', lighting.check_exposure_level, thresholds('exposure')),
-            ('contrast', lighting.check_contrast, {}),
+            ('contrast', lighting.check_contrast, thresholds('contrast')),
             ('colour_cast', lighting.check_colour_cast, thresholds('colour_cast')),
             ('background_brightness', background.check_background_brightness, thresholds('background_brightness')),
             ('background_uniformity', background.check_background_uniformity, {}),
@@ -303,6 +316,20 @@ class PassportPhotoValidator:
         except Exception as exc:
             logger.exception('OFIQ failed on this photo')
             context.ofiq_unavailable = f'OFIQ failed on this photo: {exc}'
+            return
+        # OFIQ's face parsing labels the hair, hats and clothing the selfie segmentation leaves out of the
+        # person, which the background checks would otherwise read as objects (two London Set people's hair).
+        # Only hair and hats join, and only where they touch the segmented person: the parsing also labels an
+        # object or a stain next to the person as clothing, and those must stay background
+        parsing = context.ofiq.parsing
+        mask = context.person_mask_binary
+        if parsing is not None and mask is not None and parsing.shape == mask.shape:
+            person = np.isin(parsing, (PARSING_LABELS['hair'], PARSING_LABELS['hat'])).astype(np.uint8)
+            count, labels = cv2.connectedComponents(person, connectivity=8)
+            touching = np.zeros(count, bool)
+            touching[np.unique(labels[mask > 0])] = True
+            touching[0] = False
+            context.person_mask_binary = np.maximum(mask, touching[labels].astype(np.uint8))
 
     def _populate_siglip_data(self, context: ValidationContext):
         """Score the eye region once with SigLIP and store the scores in the context."""
@@ -381,7 +408,7 @@ class PassportPhotoValidator:
 
         total_deduction = sum(issue.severity for issue in context.issues)
         score = max(0, 100 - total_deduction)
-        rules = evaluate_rules(checks)
+        rules = evaluate_rules(checks, disabled=self.disabled)
         # Valid only if no check found an error, none crashed, and every rule that has checks could be judged
         skipped_rules = [rule.id for rule in rules if rule.status == 'skipped']
         is_valid = (not skipped_rules and not any(issue.category == 'error' for issue in context.issues)

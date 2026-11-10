@@ -38,20 +38,27 @@ def check_exposure_level(context: ValidationContext, warn_below: float, fail_bel
             category='warning', message='Photo may be too dark. Check the lighting.', severity=5))
 
 
-def check_contrast(context: ValidationContext, warn_below: float = 30.0):
-    """Check overall contrast: the standard deviation of the grey levels. Warns only.
+def check_contrast(context: ValidationContext, warn_below: float = 40.0, fail_below: float = 30.0):
+    """Check overall contrast: the standard deviation of the grey levels.
 
     :param warn_below: Standard deviation (0-255 scale) below which the photo looks washed out.
+    :param fail_below: Standard deviation below which it fails (the low-contrast and darkened London variants stay under 30).
     """
     gray = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2GRAY)
 
     contrast = gray.std()
     context.measurements['contrast'] = float(contrast)
 
-    if contrast < warn_below:
+    if contrast < fail_below:
+        context.issues.append(ValidationIssue(
+            category='error',
+            message=f'Contrast is far too low (grey-level spread {contrast:.0f}). The photo looks grey.',
+            severity=7
+        ))
+    elif contrast < warn_below:
         context.issues.append(ValidationIssue(
             category='warning',
-            message='Low contrast. Image may appear washed out.',
+            message=f'Low contrast (grey-level spread {contrast:.0f}). Image may appear washed out.',
             severity=5
         ))
 

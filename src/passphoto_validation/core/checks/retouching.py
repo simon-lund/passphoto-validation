@@ -1,4 +1,6 @@
 """Retouching checks: edits that change how the person looks."""
+import math
+
 import cv2
 import mediapipe as mp
 import numpy as np
@@ -28,6 +30,7 @@ def _texture(gray: np.ndarray, centre, half_width: float, half_height: float):
 
 
 def check_skin_smoothing(context: ValidationContext, warn_below: float, warn_gradient_ratio_below: float = None,
+                         fail_below: float = -math.inf, fail_gradient_ratio_below: float = -math.inf,
                          face_width: int = 192, patch: float = 0.14):
     """Check that the skin keeps its texture: beauty filters and retouching flatten the cheeks and forehead
     while the eyes stay sharp.
@@ -35,7 +38,7 @@ def check_skin_smoothing(context: ValidationContext, warn_below: float, warn_gra
     `skin_texture_ratio` is the fine detail (mean absolute Laplacian) of the cheeks and forehead over that
     of the eyes, on the face scaled to `face_width` pixels. Scaling the face down hides an optical blur of a
     pixel or two, which the sharpness check reports, while a filter's smoothing spans more. Natural skin
-    scores about 0.25-0.6; filtered skin below 0.15. Warns only: smooth skin can be real.
+    scores about 0.25-0.6; filtered skin below 0.15. Warns only by default: smooth skin can be real.
 
     A filter over the whole face, eyes included, keeps that ratio normal, so `skin_gradient_ratio` compares
     the skin's fine detail with the typical gradient of the whole face (its median magnitude): an
@@ -45,6 +48,8 @@ def check_skin_smoothing(context: ValidationContext, warn_below: float, warn_gra
 
     :param warn_below: Texture ratio below which it warns.
     :param warn_gradient_ratio_below: Gradient ratio below which it warns; None turns that off.
+    :param fail_below: Texture ratio below which it fails; off by default.
+    :param fail_gradient_ratio_below: Gradient ratio below which it fails; off by default.
     """
     bbox = context.face_data.get('bbox')
     if not bbox or bbox['width'] <= 0:
@@ -80,15 +85,17 @@ def check_skin_smoothing(context: ValidationContext, warn_below: float, warn_gra
     context.measurements['skin_texture_ratio'] = ratio
     if gradient_ratio is not None:  # a flat face has no gradient to compare with
         context.measurements['skin_gradient_ratio'] = gradient_ratio
-    if ratio < warn_below:
+    if ratio < fail_below or ratio < warn_below:
         context.issues.append(ValidationIssue(
-            category='warning', severity=4,
+            category='error' if ratio < fail_below else 'warning', severity=4,
             message=f'The skin looks smoothed, as by a beauty filter (texture ratio {ratio:.2f}). The photo must not be retouched.'))
         return
     blurred = any(issue.check == 'face_sharpness' and issue.category == 'error' for issue in context.issues)
-    if warn_gradient_ratio_below is not None and gradient_ratio is not None and gradient_ratio < warn_gradient_ratio_below and not blurred:
+    warn_gradient = gradient_ratio is not None and warn_gradient_ratio_below is not None and gradient_ratio < warn_gradient_ratio_below
+    fail_gradient = gradient_ratio is not None and gradient_ratio < fail_gradient_ratio_below
+    if (warn_gradient or fail_gradient) and not blurred:
         context.issues.append(ValidationIssue(
-            category='warning', severity=4,
+            category='error' if fail_gradient else 'warning', severity=4,
             message=f'The skin has lost its fine texture while the edges of the face stayed sharp, as a filter over the '
                     f'whole face leaves it (gradient ratio {gradient_ratio:.3f}). The photo must not be retouched.'))
 
@@ -113,7 +120,8 @@ def _face_gradient(gray: np.ndarray, oval: np.ndarray) -> float:
     return float(np.median(magnitude)) if magnitude.size else 0.0
 
 
-def check_skin_colour_patches(context: ValidationContext, warn_share_above: float, chroma_distance: float = 25.0,
+def check_skin_colour_patches(context: ValidationContext, warn_share_above: float, fail_share_above: float = math.inf,
+                              chroma_distance: float = 25.0,
                               min_patch_share: float = 0.002, face_width: int = 256):
     """Check the skin for patches of a colour that isn't skin: the stickers face filters paint on (a pink
     nose, hearts, butterflies), face paint, coloured tattoos.
@@ -126,10 +134,11 @@ def check_skin_colour_patches(context: ValidationContext, warn_share_above: floa
     person mask and away from the oval's edge, without the lips: the forehead and the band across the eyes
     are left out because hats, hair and glasses frames sit there and would read as paint. Patches smaller
     than `min_patch_share` of the face oval are grain and moles. `skin_foreign_share` is the share of the
-    oval the remaining patches cover, `skin_foreign_patches` their number. Warns only: face paint, a clown's
-    nose and strongly coloured light on one side of the face all read the same.
+    oval the remaining patches cover, `skin_foreign_patches` their number. Face paint, a clown's nose and
+    strongly coloured light on one side of the face read the same as stickers.
 
     :param warn_share_above: Share of the face oval covered by foreign patches above which it warns.
+    :param fail_share_above: Share above which it fails.
     """
     bbox = context.face_data.get('bbox')
     if not bbox or bbox['width'] <= 0:
@@ -182,6 +191,6 @@ def check_skin_colour_patches(context: ValidationContext, warn_share_above: floa
     context.measurements['skin_foreign_patches'] = len(patches)
     if share > warn_share_above:
         context.issues.append(ValidationIssue(
-            category='warning', severity=4,
+            category='error' if share > fail_share_above else 'warning', severity=7 if share > fail_share_above else 4,
             message=f'Patches of a colour that is not skin cover {share:.0%} of the face, as the stickers of a face '
                     f'filter or face paint do. The photo must not be retouched or filtered.'))

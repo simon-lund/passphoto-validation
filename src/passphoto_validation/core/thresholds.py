@@ -16,13 +16,20 @@ A deployment can override any parameter of any check without editing this file: 
 `load_overrides` and merged by `apply_overrides`, which refuses unknown checks, unknown parameters and
 wrong types. `to_toml` writes every parameter with its current value, to start such a file from. The file
 is applied last, after this table and `ValidatorConfig` (so its `[resolution]` wins over `MIN_RES_*`).
+
+The convention of that file: every check has a warn level and a fail level (`warn_…`, `fail_…`); `false`
+turns a level off (in the code an off level is +inf or -inf, which no measurement reaches, so the checks
+need no special case); `enabled = false` turns a check off: it is not run, and a rule only it covered
+ends as not_checked, which never blocks validity. A check whose measure has no sensible second level
+(`photo_format`) keeps the one it has.
 """
 import inspect
+import math
 import textwrap
 import tomllib
 from dataclasses import dataclass
 from numbers import Real
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 
 @dataclass(frozen=True)
@@ -40,6 +47,11 @@ THRESHOLDS: Dict[str, Thresholds] = {
     'compression': Thresholds(
         dict(warn_above=1.6, fail_above=2.5),
         'Brightness jumps at 8-px JPEG block edges over those inside; JPEG quality 4 fails'),
+    'contrast': Thresholds(
+        dict(warn_below=40, fail_below=30),
+        'Standard deviation of the grey levels: compliant crops never below 42, the low-contrast variant never '
+        'above 25, the darkened one 29; 95% of real candid photos above 41. Fails since the review of 2026-11-10: '
+        'a grey photo is not a valid photo'),
     'exposure': Thresholds(
         dict(warn_below=75, fail_below=60),
         'L* of the brightest 1% (the background), so dark skin is not read as underexposed; the darkened variant fails'),
@@ -53,7 +65,7 @@ THRESHOLDS: Dict[str, Thresholds] = {
         'does one that cancels a coloured background; dark lenses are read as eye whites (ofiq_eyes_visible '
         'fails those photos); eyes too closed to show their whites skip the check'),
     'background_brightness': Thresholds(
-        dict(min_brightness=120, fail_below=80),
+        dict(warn_below=120, fail_below=80),
         'Fails on dark backgrounds, warns on mid-tones: every Open Images background labelled dark is below 80, '
         'none labelled light; the London Set\'s plain backgrounds are all above 190'),
     'background_pattern': Thresholds(
@@ -73,7 +85,7 @@ THRESHOLDS: Dict[str, Thresholds] = {
         '(lightness deviation under 3) measures 28 and more on every shadow variant and at most 4.7 on compliant, '
         'glasses and rotated crops; a texture cap of 5 would let good crops reach 7.3'),
     'print_defects': Thresholds(
-        dict(fail_at=3),
+        dict(warn_at=1, fail_at=3),
         'Marks on the background; any mark warns, three fail. Compliant crops show up to 2 (stray hair), the ink '
         'variant 3 or more'),
     'skin_smoothing': Thresholds(
@@ -81,13 +93,14 @@ THRESHOLDS: Dict[str, Thresholds] = {
         'Cheek and forehead texture over eye texture at 192 px face width; filtered skin stays under 0.14, '
         'natural skin above 0.19. Skin texture over the median gradient of the face, for a filter that smooths '
         'the eyes too: compliant, glasses, cast, shadow, dark and low-contrast crops stay above 0.125, the '
-        'whole-face smoothed variant under 0.11 (smoothed_all). Warns only'),
+        'whole-face smoothed variant under 0.11 (smoothed_all). Warns only by default: smooth skin can be real; '
+        'the fail levels are off (fail_below, fail_gradient_ratio_below)'),
     'skin_colour_patches': Thresholds(
-        dict(warn_share_above=0.02, chroma_distance=30),
+        dict(warn_share_above=0.015, fail_share_above=0.025, chroma_distance=30),
         'Patches of the lower face more than 30 CIELAB chroma units from the skin, at least as saturated: 0 on '
-        'every London crop (plain, glasses, sunglasses, cast, shadow), 3-4% of the face oval with the sticker '
-        'variant (face_stickers); 2% of real candid photos warn (mirrored goggles, a clown nose, a glass or fruit '
-        'at the mouth). Warns only'),
+        'every London crop (plain, glasses, sunglasses, cast, shadow), 3% or more of the face oval with the '
+        'sticker variant (face_stickers); of 223 real candid photos 5 exceed 2.5% (a clown nose, goggles, face '
+        'paint) and 2% more warn. Fails since the review of 2026-11-10: a filter\'s stickers make the photo invalid'),
     # Eyes
     'gaze': Thresholds(
         dict(warn_above=0.08, fail_above=0.15),
@@ -116,7 +129,10 @@ THRESHOLDS: Dict[str, Thresholds] = {
     # Open Images (scripts/score_labels.py)
     'ofiq_head_yaw': Thresholds(dict(warn_above=5, fail_above=10), '3/4 views: 96-100% caught, 2% false warns'),
     'ofiq_head_pitch': Thresholds(dict(warn_above=8, fail_above=12), 'No variant tests it'),
-    'ofiq_head_roll': Thresholds(dict(warn_above=6, fail_above=8), '12 degrees fails 98%; 4 degrees passes; 1% false fails'),
+    'ofiq_head_roll': Thresholds(
+        dict(warn_above=4, fail_above=8),
+        '12 degrees fails 98%, 1% false fails. Warns from 4 since the review of 2026-11-10 (a visible tilt should '
+        'warn): half of the 4-degree variant warns, and 6% of compliant crops, whose real heads tilt up to 4.7'),
     'ofiq_expression': Thresholds(
         dict(warn_below=85, fail_below=50), 'Smiling: 65% caught, 17% warned; faint closed-mouth smiles pass'),
     'ofiq_mouth_closed': Thresholds(
@@ -142,8 +158,8 @@ THRESHOLDS: Dict[str, Thresholds] = {
         'catches those). At 60: 88-90% caught; on real candid photos 10% fail instead of 9%'),
 }
 
-_WARN_KEYS = ('warn_above', 'warn_below', 'warn_share_above', 'min_brightness')
-_FAIL_KEYS = ('fail_above', 'fail_below', 'fail_at')
+_WARN_KEYS = ('warn_above', 'warn_below', 'warn_share_above', 'warn_at')
+_FAIL_KEYS = ('fail_above', 'fail_below', 'fail_share_above', 'fail_at')
 
 
 def thresholds(name: str) -> Dict[str, Any]:
@@ -155,21 +171,37 @@ def warn_fail(name: str) -> Tuple[Optional[float], Optional[float]]:
     """The (warn, fail) values of the check `name`, whatever their direction, for drawing them as lines.
 
     None where the check has no such threshold (`skin_smoothing` never fails, `red_eyes` never warns).
-    `background_brightness` warns below `min_brightness`.
+    A level turned off (±inf) reads as None too.
     """
     kwargs = THRESHOLDS[name].kwargs
     warn = next((kwargs[key] for key in _WARN_KEYS if key in kwargs), None)
     fail = next((kwargs[key] for key in _FAIL_KEYS if key in kwargs), None)
-    return warn, fail
+    return (None if is_off(warn) else warn), (None if is_off(fail) else fail)
 
 
 # --- The thresholds file: every parameter of every check, overridable per deployment
 
 Check = Tuple[str, Callable, Dict[str, Any]]  # (name, function, keyword arguments), as the validator registers them
+LEVEL_PREFIXES = ('warn_', 'fail_')
 
 
 class ThresholdsFileError(ValueError):
     """A thresholds file names a check or a parameter the validator does not have, or gives a wrong type."""
+
+
+def is_level(key: str) -> bool:
+    """Whether a parameter is a warn or fail level, the kind `false` turns off."""
+    return key.startswith(LEVEL_PREFIXES)
+
+
+def off_value(key: str) -> float:
+    """The value that turns a level off: nothing is above +inf, nothing below -inf."""
+    return -math.inf if key.endswith('_below') else math.inf
+
+
+def is_off(value: Any) -> bool:
+    """Whether a level is turned off (±inf)."""
+    return isinstance(value, float) and math.isinf(value)
 
 
 def load_overrides(path: str) -> Dict[str, Dict[str, Any]]:
@@ -212,11 +244,24 @@ def _kind(value: Any) -> Optional[str]:
     return None
 
 
+def disabled_in(overrides: Dict[str, Dict[str, Any]], source: str = 'thresholds file') -> Set[str]:
+    """The checks a thresholds file turns off (`enabled = false`)."""
+    off = set()
+    for name, values in overrides.items():
+        if 'enabled' in values:
+            if not isinstance(values['enabled'], bool):
+                raise ThresholdsFileError(f'{source}: [{name}] enabled must be true or false, not {values["enabled"]!r}')
+            if not values['enabled']:
+                off.add(name)
+    return off
+
+
 def apply_overrides(checks: List[Check], overrides: Dict[str, Dict[str, Any]], source: str = 'thresholds file') -> List[Check]:
     """The check list with `overrides` merged into each check's keyword arguments.
 
     Every check name, parameter name and value type is checked first, so a typo fails loudly when the
-    validator starts rather than silently keeping the default.
+    validator starts rather than silently keeping the default. `false` on a warn or fail level turns it off;
+    `enabled` is read by `disabled_in`, the list keeps every check.
     """
     by_name = {name: (check, kwargs) for name, check, kwargs in checks}
     unknown = [name for name in overrides if name not in by_name]
@@ -227,16 +272,23 @@ def apply_overrides(checks: List[Check], overrides: Dict[str, Dict[str, Any]], s
         new_kwargs = dict(kwargs)
         allowed = parameters(check, kwargs)
         for key, value in overrides.get(name, {}).items():
+            if key == 'enabled':
+                if not isinstance(value, bool):
+                    raise ThresholdsFileError(f'{source}: [{name}] enabled must be true or false, not {value!r}')
+                continue
             if key not in allowed:
                 takes = ', '.join(allowed) if allowed else 'no parameters'
-                raise ThresholdsFileError(f'{source}: [{name}] has no parameter {key}. It takes: {takes}')
+                raise ThresholdsFileError(f'{source}: [{name}] has no parameter {key}. It takes: enabled, {takes}')
+            if is_level(key) and value is False:
+                new_kwargs[key] = off_value(key)
+                continue
             current = allowed[key]
-            if current is None:
-                kind = _kind(value)
-            else:
-                kind = _kind(current)
-            if kind != _kind(value) or kind is None:
-                raise ThresholdsFileError(f'{source}: [{name}] {key} must be a {kind or "number"}, not {value!r}')
+            kind = _kind(current) if current is not None else _kind(value)
+            if kind is None or kind != _kind(value):
+                wanted = kind or 'number'
+                if is_level(key):
+                    wanted += ', or false to turn the level off'
+                raise ThresholdsFileError(f'{source}: [{name}] {key} must be a {wanted}, not {value!r}')
             new_kwargs[key] = tuple(value) if isinstance(current, tuple) else value
         merged.append((name, check, new_kwargs))
     return merged
@@ -245,6 +297,8 @@ def apply_overrides(checks: List[Check], overrides: Dict[str, Dict[str, Any]], s
 def _toml_value(value: Any) -> str:
     if isinstance(value, bool):
         return 'true' if value else 'false'
+    if is_off(value):
+        return 'false'
     if isinstance(value, (tuple, list)):
         return '[' + ', '.join(_toml_value(v) for v in value) + ']'
     if isinstance(value, float):
@@ -252,7 +306,7 @@ def _toml_value(value: Any) -> str:
     return str(value)
 
 
-def to_toml(checks: List[Check]) -> str:
+def to_toml(checks: List[Check], disabled: Set[str] = frozenset()) -> str:
     """Every parameter of every check with the value it runs with, as TOML: the file to edit and pass back."""
     lines = [
         '# Every parameter of every check, with the value the validator runs with.',
@@ -261,15 +315,16 @@ def to_toml(checks: List[Check]) -> str:
         '#   THRESHOLDS_FILE=thresholds.toml uv run passport-validator-api',
         '# A section is a check, its keys are the parameters of that check (core/thresholds.py says where',
         '# the calibrated numbers came from; the others are the defaults of the check functions).',
+        '# warn_... and fail_... are the levels: false turns one off. enabled = false turns the whole check off;',
+        '# a rule only that check covered is then not_checked, which never blocks validity.',
         '',
     ]
     for name, check, kwargs in checks:
         found = parameters(check, kwargs)
-        if not found:
-            continue
         lines.append(f'[{name}]')
         if name in THRESHOLDS:
             lines.extend(textwrap.wrap(THRESHOLDS[name].note, 100, initial_indent='# ', subsequent_indent='# '))
+        lines.append(f'enabled = {"false" if name in disabled else "true"}')
         for key, value in found.items():
             if value is None:
                 lines.append(f'# {key}: unset')

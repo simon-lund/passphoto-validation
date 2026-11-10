@@ -1,4 +1,5 @@
 """Eye checks OFIQ doesn't cover: gaze, red eyes, tinted glasses and reflections on glasses."""
+import math
 from typing import Tuple
 
 import cv2
@@ -58,13 +59,15 @@ def _disk(context: ValidationContext, centre, radius: float) -> np.ndarray:
     return mask.astype(bool)
 
 
-def check_red_eyes(context: ValidationContext, fail_above: float, pupil_share: float = 0.5, redder_than_skin: float = 2.0):
+def check_red_eyes(context: ValidationContext, fail_above: float, warn_above: float = math.inf,
+                   pupil_share: float = 0.5, redder_than_skin: float = 2.0):
     """Check for red eyes (flash reflected by the retina): pupil pixels much redder than the skin below the eye.
 
     Redness is red over the larger of green and blue. Comparing with the skin keeps a warm colour cast, and
     eyelid skin over a half-closed eye, from counting as red eyes.
 
     :param fail_above: Share of red pupil pixels in the redder eye above which it fails.
+    :param warn_above: Share above which it warns; off by default.
     :param pupil_share: Pupil radius as a share of the iris radius.
     :param redder_than_skin: How many times as red as the skin below the eye a pupil pixel must be.
     """
@@ -88,6 +91,9 @@ def check_red_eyes(context: ValidationContext, fail_above: float, pupil_share: f
     if max(shares) > fail_above:
         context.issues.append(ValidationIssue(
             category='error', message='Red eyes detected. Retake the photo without red-eye.', severity=8))
+    elif max(shares) > warn_above:
+        context.issues.append(ValidationIssue(
+            category='warning', message='The pupils may be red.', severity=5))
 
 
 def _glasses(context: ValidationContext):
@@ -205,7 +211,7 @@ def _siglip_score(context: ValidationContext, question: str, measurement: str) -
     return score
 
 
-def check_glasses_glare_siglip(context: ValidationContext, min_glasses_share: float, warn_above: float):
+def check_glasses_glare_siglip(context: ValidationContext, min_glasses_share: float, warn_above: float, fail_above: float = math.inf):
     """Second opinion on reflections on glasses: SigLIP's zero-shot score on the eye region (see core/siglip.py).
 
     It sees soft sheens and mirrored windows that check_glasses_glare misses, but less surely, so it only
@@ -213,23 +219,26 @@ def check_glasses_glare_siglip(context: ValidationContext, min_glasses_share: fl
 
     :param min_glasses_share: Glasses pixels per squared eye distance above which glasses count as worn.
     :param warn_above: Score (logit of reflection prompts minus clean-lens prompts) above which it warns.
+    :param fail_above: Score above which it fails; off by default.
     """
     score = _siglip_score(context, 'glare', 'siglip_glare_score')
     if _glasses(context)[3] < min_glasses_share:
         return
     if score > warn_above:
         context.issues.append(ValidationIssue(
-            category='warning', message='There may be reflections on the glasses.', severity=5))
+            category='error' if score > fail_above else 'warning', message='There may be reflections on the glasses.', severity=5))
 
 
-def check_gaze_siglip(context: ValidationContext, warn_above: float):
+def check_gaze_siglip(context: ValidationContext, warn_above: float, fail_above: float = math.inf):
     """Second opinion on gaze: SigLIP's zero-shot score on the eye region (see core/siglip.py).
 
     It judges the whole eye region instead of the iris position, and ranked averted gazes on real photos
     better than check_gaze (AUC 0.83 against 0.76), but it only warns.
 
     :param warn_above: Score (logit of looking-away prompts minus looking-at-camera prompts) above which it warns.
+    :param fail_above: Score above which it fails; off by default.
     """
-    if _siglip_score(context, 'gaze_aside', 'siglip_gaze_score') > warn_above:
+    score = _siglip_score(context, 'gaze_aside', 'siglip_gaze_score')
+    if score > warn_above:
         context.issues.append(ValidationIssue(
-            category='warning', message='The eyes may not be looking into the camera.', severity=5))
+            category='error' if score > fail_above else 'warning', message='The eyes may not be looking into the camera.', severity=5))

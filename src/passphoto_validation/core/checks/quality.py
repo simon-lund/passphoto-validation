@@ -96,7 +96,7 @@ def check_compression_blocks(context: ValidationContext, warn_above: float, fail
             category='warning', message='Visible compression artefacts.', severity=5))
 
 
-def check_print_defects(context: ValidationContext, fail_at: int, min_area_share: float = 0.0002,
+def check_print_defects(context: ValidationContext, fail_at: int, warn_at: int = 1, min_area_share: float = 0.0002,
                         max_area_share: float = 0.01, contrast: float = 15.0):
     """Check the background for marks a print or scan leaves: ink spots, dust, scratches.
 
@@ -111,7 +111,8 @@ def check_print_defects(context: ValidationContext, fail_at: int, min_area_share
     Clean studio crops (London Set) show 0 marks, 4% of them 1 or 2 (stray hair the band doesn't cover);
     three ink spots of about 1 mm and a scratch show as 3-5 on 97% of them.
 
-    :param fail_at: Number of marks from which it fails; fewer than that warn.
+    :param fail_at: Number of marks from which it fails.
+    :param warn_at: Number of marks from which it warns.
     """
     from .background import _background_lightness
 
@@ -146,7 +147,7 @@ def check_print_defects(context: ValidationContext, fail_at: int, min_area_share
         context.issues.append(ValidationIssue(
             category='error', severity=6,
             message=f'{len(marks)} marks on the background (spots, stains or scratches). The print or scan must be clean.'))
-    elif marks:
+    elif len(marks) >= warn_at:
         context.issues.append(ValidationIssue(
             category='warning', severity=3,
             message='A mark on the background (a spot, stain or scratch).'))

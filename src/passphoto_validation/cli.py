@@ -298,14 +298,16 @@ def thresholds(thresholds: Optional[Path] = THRESHOLDS_OPTION):
     """Print every parameter of every check with its current value, as a TOML thresholds file.
 
     Save it, keep the lines to change, and pass the file back with --thresholds (or THRESHOLDS_FILE for the API).
+    warn_... and fail_... are the levels, false turns one off; enabled = false turns a check off.
     """
     config = ValidatorConfig(thresholds_file=str(thresholds) if thresholds else None)
     try:
         checks = PassportPhotoValidator.registered_checks(config)
+        disabled = PassportPhotoValidator.disabled_checks(config)
     except ThresholdsFileError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2)
-    typer.echo(to_toml(checks))
+    typer.echo(to_toml(checks, disabled))
 
 
 @app.command()

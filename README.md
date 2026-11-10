@@ -79,6 +79,16 @@ uv run passport-validator thresholds > thresholds.toml
 uv run passport-validator validate tests/test-images/9.jpg --thresholds thresholds.toml
 ```
 
+Every check has a warn level and a fail level (`warn_…`, `fail_…`); `false` turns a level off, and `enabled = false` turns a check off, so that the rule only it covered reports `not_checked`, which never blocks validity. So "stickers warn only", "stickers fail from 4 percent" or "no retouching rule at all" are each a line or two:
+
+```toml
+[skin_colour_patches]
+fail_share_above = false
+
+[skin_smoothing]
+enabled = false
+```
+
 The API reads the same file from `THRESHOLDS_FILE` (or `.env`) and lists what it runs with at `/v1/thresholds`. A file that names a check or a parameter that does not exist, or gives a wrong type, stops the command or the server with a message, so a typo never silently keeps the default. The file is applied last, so its `[resolution]` values win over `MIN_RES_WIDTH` and the other resolution settings of the environment.
 
 ## Evaluation data

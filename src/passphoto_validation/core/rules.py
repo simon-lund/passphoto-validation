@@ -6,7 +6,7 @@ Every rule is listed, including the ones no check covers yet, so a report never 
 it did not judge. Rule ids are part of the API contract: add new ones, never rename.
 """
 from dataclasses import dataclass
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Dict, Iterable, List, Literal, Optional, Tuple
 
 from .models import CheckResult, RuleResult
 
@@ -158,8 +158,8 @@ RULES: List[Rule] = [
          ('skin_smoothing', 'skin_colour_patches'), 'partial',
          'Skin smoothing, as beauty filters do: the cheeks and forehead lose their texture while the eyes stay '
          'sharp, or the whole face loses it while its edges stay. Coloured stickers or paint on the lower face '
-         '(a filter\'s nose, hearts, butterflies) as patches of a colour that is not skin. Warnings only, '
-         'calibrated on synthetic filters. Not detected: white or black marks (sparkles, drawn whiskers), '
+         '(a filter\'s nose, hearts, butterflies) as patches of a colour that is not skin; the stickers fail, '
+         'the smoothing only warns by default. Calibrated on synthetic filters. Not detected: white or black marks (sparkles, drawn whiskers), '
          'stickers on the forehead, ears or crowns above the head (real hair accessories are allowed and look '
          'the same), a swapped background, reshaped features.'),
 ]
@@ -168,13 +168,15 @@ _RAN = ('pass', 'warn', 'fail')
 _SEVERITY = {'pass': 0, 'warn': 1, 'fail': 2}
 
 
-def evaluate_rules(checks: List[CheckResult]) -> List[RuleResult]:
+def evaluate_rules(checks: List[CheckResult], disabled: Iterable[str] = ()) -> List[RuleResult]:
     """Derive each rule's status from the checks that cover it.
 
     A rule gets the worst status of its checks that ran. If none of them ran, or one of them crashed
     and none failed, it is 'skipped': without every check's verdict the rule can't pass, while a fail
-    stands on its own. A rule with no checks at all is 'not_checked'.
+    stands on its own. A rule with no checks at all, or whose checks are all turned off by the thresholds
+    file (`disabled`), is 'not_checked'.
     """
+    disabled = set(disabled)
     by_name = {check.name: check for check in checks}
     results = []
 
@@ -185,6 +187,8 @@ def evaluate_rules(checks: List[CheckResult]) -> List[RuleResult]:
 
         if not rule.checks:
             status, reasons = 'not_checked', []
+        elif not covering and all(name in disabled for name in rule.checks):
+            status, reasons = 'not_checked', ['Its checks are turned off in the thresholds file.']
         elif not ran or (crashed and not any(check.status == 'fail' for check in ran)):
             status = 'skipped'
             reasons = [reason for check in covering if check.status not in _RAN for reason in check.reasons]

@@ -199,7 +199,7 @@ def test_coloured_stickers_on_the_face_warn_skin_colour_patches(validator, photo
         size = int(face_width * 0.07)
         for side in (-1, 1):
             cv2.ellipse(stickered, (cx + side * size // 2, cy), (size // 2, int(size * 0.7)), side * 25, 0, 360, colour, -1, cv2.LINE_AA)
-    assert _statuses(validator, stickered)['skin_colour_patches'] == 'warn'
+    assert _statuses(validator, stickered)['skin_colour_patches'] == 'fail'
 
 
 def _red_pupils(image_bgr):
@@ -222,6 +222,12 @@ def test_red_pupils_fail_red_eyes(validator, photo):
 def _warm(image_bgr):
     # The colour cast of the London Set's colour_cast variant: less blue, more red
     return np.clip(image_bgr * np.array((0.6, 0.95, 1.3)), 0, 255).astype(np.uint8)
+
+
+def test_washed_out_photo_fails_contrast(validator, photo):
+    # The London Set's low-contrast variant: the grey levels pulled towards the mean
+    flat = (photo.mean() + (photo - photo.mean()) * 0.3).astype(np.uint8)
+    assert _statuses(validator, flat)['contrast'] == 'fail'
 
 
 def test_warm_colour_cast_passes_red_eyes(validator, photo):
