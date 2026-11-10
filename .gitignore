@@ -24,4 +24,4 @@ coverage.xml
 .ipynb_checkpoints/
 
 # the desktop app's launch configs
-/.claude/
+/.claude/launch.json
