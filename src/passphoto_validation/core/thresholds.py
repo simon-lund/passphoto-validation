@@ -46,11 +46,12 @@ THRESHOLDS: Dict[str, Thresholds] = {
     'colour_cast': Thresholds(
         dict(warn_above=12, fail_above=20),
         'CIELAB chroma the background and the whites of the eyes share in hue. Every London crop that should '
-        'pass measures 0 (the backdrop is neutral) and every colour-cast variant 34 or more, so the London Set '
-        'sets no threshold; the numbers come from 219 real candid photos judged by eye: above 20 (11 photos, 7 '
-        'of them already failed by OFIQ) the tint is plain, 14-20 is warm indoor light, 10-13 mixed. A cast on '
-        'the face alone reads 0 (that is OFIQ\'s case), so does one that cancels a coloured background; dark '
-        'lenses are read as eye whites (ofiq_eyes_visible fails those photos)'),
+        'pass measures 0 (the backdrop is neutral) and every colour-cast variant 32 or more, so the London Set '
+        'sets no threshold; the numbers come from 223 real candid photos judged by eye: above 20 the tint is '
+        'plain (11 photos, 8 of them failed by OFIQ too, the other 3 warm indoor light), 12-20 is warm light '
+        '(19 photos warn, 15 of which OFIQ passes). A cast on the face alone reads 0 (that is OFIQ\'s case), so '
+        'does one that cancels a coloured background; dark lenses are read as eye whites (ofiq_eyes_visible '
+        'fails those photos); eyes too closed to show their whites skip the check'),
     'background_brightness': Thresholds(
         dict(min_brightness=120, fail_below=80),
         'Fails on dark backgrounds, warns on mid-tones: every Open Images background labelled dark is below 80, '
@@ -137,8 +138,8 @@ THRESHOLDS: Dict[str, Thresholds] = {
     'ofiq_natural_colour': Thresholds(
         dict(warn_below=80, fail_below=60),
         'Every London crop that should pass scores 100; the colour-cast variant scores 39 in the middle, 52-60 on the '
-        'ones a fail threshold of 50 only warned on, and 100 on one in ten (OFIQ sees nothing there). At 60: 88-90% '
-        'caught; on real candid photos 10% fail instead of 9%'),
+        'ones a fail threshold of 50 only warned on, and 100 on one in ten (OFIQ sees nothing there; colour_cast '
+        'catches those). At 60: 88-90% caught; on real candid photos 10% fail instead of 9%'),
 }
 
 _WARN_KEYS = ('warn_above', 'warn_below', 'warn_share_above', 'min_brightness')

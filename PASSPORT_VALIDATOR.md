@@ -260,7 +260,7 @@ The checks they replaced (BRISQUE, the solvePnP head pose, face-brightness expos
 **How well it works** (London Set, 102 people; see `notebooks/evaluation.ipynb`, and `notebooks/stichprobe.ipynb` for a random sample of the photos with their verdicts):
 - **Defects caught as fail:** 94-100% for most. The exceptions:
   - smiles: 67% fail, 13% warn;
-  - colour casts: 89% (one in ten casts scores 100 on OFIQ's natural colour and is not seen; the fail threshold rose from 50 to 60 on 2026-11-08, which costs 1% more fails on real candid photos);
+  - colour casts: 100% since `colour_cast` (2026-11-10) reads the tint the background and the whites of the eyes share: OFIQ's natural colour alone caught 89%, scoring one cast in ten as natural. On the London backdrop the measure is easy (every cast 32 or more, every good crop 0); on real candid photos the rule fails 12% of the photos instead of 9%, and the two candid photos that were valid before now fail on a warm indoor cast;
   - low contrast: warns only.
 - **Photos that should pass:** 96% fail no rule (the old pipeline: 11%), and 83% get no warning either. The rest are borderline head poses and a few backgrounds.
 
