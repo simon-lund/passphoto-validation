@@ -72,7 +72,6 @@
   .bar .count { font-weight: 700; }
 
   main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 440px; gap: 2px; background: var(--ink); min-height: 0; }
-  @media (max-width: 960px) { main { grid-template-columns: minmax(0, 1fr); } }
   .stage { background: var(--paper); display: flex; flex-direction: column; min-height: 0; }
   .layers { display: flex; flex-wrap: wrap; gap: 2px 14px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
   .layers label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; white-space: nowrap; }
@@ -134,6 +133,15 @@
   .done h1 { font-size: 24px; margin-bottom: 12px; }
   .done p { margin-top: 8px; }
   .done code { background: var(--panel); padding: 1px 4px; }
+
+  /* One column on a narrow window: the photo keeps most of the height, the panel follows below */
+  @media (max-width: 960px) {
+    body { height: auto; min-height: 100%; }
+    main { display: block; overflow: visible; }
+    .stage { min-height: 0; }
+    .canvas-wrap { min-height: 60vh; }
+    .panel { overflow: visible; border-top: 2px solid var(--ink); }
+  }
 </style>
 </head>
 <body>
@@ -353,9 +361,21 @@
       const b = document.createElement('button');
       b.type = 'button'; b.className = 'rule'; b.dataset.rule = rule.id; b.setAttribute('aria-pressed', 'false');
       b.title = 'Click when this rule\'s status is wrong';
-      b.innerHTML = `<span class="st" data-status="${rule.status}">${rule.status}</span><span class="title">${esc(rule.title)}</span>` +
+      // The headline is the problem the check reported (its first sentence); the rule it breaks goes below,
+      // since the rule's title names the good state and reads backwards under a fail
+      const reasons = rule.reasons.map((r) => r.trim()).filter(Boolean);
+      let headline, rest;
+      if (reasons.length) {
+        const m = reasons[0].match(/^(.*?[.!?])(\s+|$)([\s\S]*)$/);
+        headline = m ? m[1] : reasons[0];
+        rest = [m ? m[3] : '', ...reasons.slice(1)].filter(Boolean).join(' ');
+      } else {
+        headline = rule.status === 'skipped' ? 'Could not be judged' : rule.title;
+        rest = '';
+      }
+      b.innerHTML = `<span class="st" data-status="${rule.status}">${rule.status}</span><span class="title">${esc(headline)}</span>` +
         `<span class="mark small"><span class="when-off">mark wrong</span><span class="when-on">✗ wrong</span></span>` +
-        `<span class="reasons small muted">${esc(rule.reasons.join(' ')) || esc(rule.id)}</span>`;
+        `<span class="reasons small muted">Rule: ${esc(rule.title)}${rest ? ' · ' + esc(rest) : ''}</span>`;
       b.addEventListener('click', () => {
         const on = b.getAttribute('aria-pressed') !== 'true';
         b.setAttribute('aria-pressed', String(on));
@@ -449,7 +469,9 @@
       .filter(Boolean).join(' · ');
     $('set').textContent = ` ${state.queue.set}${filters ? ' · ' + filters : ''}` +
       `${state.queue.commit ? ' · ' + state.queue.commit : ''}${state.queue.thresholds_file ? ' · ' + state.queue.thresholds_file : ''}`;
-    show(0);
+    // Resume at the first photo without an answer (a reload must not start over)
+    const first = state.queue.items.findIndex((it) => it.reviewed !== true && it.reviewed !== false);
+    show(first < 0 ? state.queue.items.length : first);
   })();
 })();
 </script>
