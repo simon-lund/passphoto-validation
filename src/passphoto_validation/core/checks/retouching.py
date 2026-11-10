@@ -4,6 +4,7 @@ import mediapipe as mp
 import numpy as np
 
 from ..models import CheckSkipped, ValidationIssue, ValidationContext
+from ..utils import mesh_points
 
 # MediaPipe face mesh indices: the middle of each cheek, the forehead (top, and just above the brows),
 # and the corners of each eye
@@ -15,13 +16,6 @@ _MESH = mp.solutions.face_mesh
 # The features left out when the skin's colour is judged: eyes and brows (make-up), lips (lipstick)
 _FEATURES = (_MESH.FACEMESH_LEFT_EYE, _MESH.FACEMESH_RIGHT_EYE, _MESH.FACEMESH_LEFT_EYEBROW,
              _MESH.FACEMESH_RIGHT_EYEBROW, _MESH.FACEMESH_LIPS)
-
-
-def _points(context: ValidationContext) -> np.ndarray:
-    landmarks = context.face_data.get('landmarks')
-    if not landmarks:
-        raise CheckSkipped('No facial landmarks found.')
-    return np.array([(p.x * context.width, p.y * context.height) for p in landmarks.landmark])
 
 
 def _texture(gray: np.ndarray, centre, half_width: float, half_height: float):
@@ -55,7 +49,7 @@ def check_skin_smoothing(context: ValidationContext, warn_below: float, warn_gra
     bbox = context.face_data.get('bbox')
     if not bbox or bbox['width'] <= 0:
         raise CheckSkipped('No face found.')
-    points = _points(context)
+    points = mesh_points(context)
 
     scale = face_width / bbox['width']
     gray = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2GRAY).astype(np.float32)
@@ -140,7 +134,7 @@ def check_skin_colour_patches(context: ValidationContext, warn_share_above: floa
     bbox = context.face_data.get('bbox')
     if not bbox or bbox['width'] <= 0:
         raise CheckSkipped('No face found.')
-    points = _points(context)
+    points = mesh_points(context)
 
     scale = face_width / bbox['width']
     image = cv2.resize(context.image_np, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)

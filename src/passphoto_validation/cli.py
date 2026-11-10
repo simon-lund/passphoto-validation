@@ -15,6 +15,7 @@ from rich.table import Table
 
 from passphoto_validation.core.utils import prepare_image
 from passphoto_validation.core import PassportPhotoValidator, ValidatorConfig
+from passphoto_validation.core.thresholds import ThresholdsFileError, to_toml
 
 app = typer.Typer(
     name="passport-validator",
@@ -22,6 +23,25 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
+
+THRESHOLDS_OPTION = typer.Option(
+    None,
+    "--thresholds",
+    "-t",
+    exists=True,
+    dir_okay=False,
+    help="A TOML file that overrides check parameters (start from `passport-validator thresholds`)",
+)
+
+
+def _validator(confidence: float, thresholds: Optional[Path]) -> PassportPhotoValidator:
+    """The validator for the CLI's options; a bad thresholds file ends the command with its message."""
+    config = ValidatorConfig(min_detection_confidence=confidence, thresholds_file=str(thresholds) if thresholds else None)
+    try:
+        return PassportPhotoValidator(config)
+    except ThresholdsFileError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
 
 
 def load_image(image_path: Path) -> np.ndarray:
@@ -62,9 +82,10 @@ def validate(
         "-v",
         help="Show detailed measurements"
     ),
+    thresholds: Optional[Path] = THRESHOLDS_OPTION,
 ):
     """
-    Validate a passport photo against ICAO standards.
+    Check a photo against the German ID photo rules.
 
     Returns a detailed report with errors, warnings, and recommendations.
     """
@@ -76,7 +97,7 @@ def validate(
 
     # Validate
     with console.status("[bold cyan]Analyzing photo..."):
-        validator = PassportPhotoValidator(ValidatorConfig(min_detection_confidence=confidence))
+        validator = _validator(confidence, thresholds)
         report = validator(image_np)
 
     # Display results
@@ -197,9 +218,10 @@ def batch(
         max=1.0,
         help="Minimum face detection confidence"
     ),
+    thresholds: Optional[Path] = THRESHOLDS_OPTION,
 ):
     """
-    Validate multiple passport photos in a directory against ICAO standards.
+    Check every photo in a directory against the German ID photo rules.
 
     Processes all images matching the pattern and generates a summary.
     """
@@ -216,7 +238,7 @@ def batch(
     if output_dir:
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    validator = PassportPhotoValidator(ValidatorConfig(min_detection_confidence=confidence))
+    validator = _validator(confidence, thresholds)
 
     # Process each image
     results = []
@@ -269,6 +291,21 @@ def batch(
 
     if output_dir:
         console.print(f"\n[green]Reports saved to:[/green] {output_dir}")
+
+
+@app.command()
+def thresholds(thresholds: Optional[Path] = THRESHOLDS_OPTION):
+    """Print every parameter of every check with its current value, as a TOML thresholds file.
+
+    Save it, keep the lines to change, and pass the file back with --thresholds (or THRESHOLDS_FILE for the API).
+    """
+    config = ValidatorConfig(thresholds_file=str(thresholds) if thresholds else None)
+    try:
+        checks = PassportPhotoValidator.registered_checks(config)
+    except ThresholdsFileError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+    typer.echo(to_toml(checks))
 
 
 @app.command()

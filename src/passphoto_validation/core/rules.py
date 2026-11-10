@@ -104,8 +104,9 @@ RULES: List[Rule] = [
          ('resolution', 'compression'), 'full',
          'Minimum resolution and JPEG block artefacts.'),
     Rule('natural_colour', 'photo_quality', 'Natural colours, no colour cast',
-         ('ofiq_natural_colour',), 'full',
-         'Skin colour in the CIELAB range of natural skin tones (ISO/IEC 29794-5).'),
+         ('ofiq_natural_colour', 'colour_cast'), 'full',
+         'Skin colour in the CIELAB range of natural skin tones (ISO/IEC 29794-5), and no tint that the '
+         'background and the whites of the eyes share.'),
 
     # Head position and facial expression
     Rule('neutral_expression', 'head_and_expression', 'Neutral expression: mouth closed, no big smile',

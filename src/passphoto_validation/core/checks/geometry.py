@@ -55,12 +55,16 @@ def _crown_y(context: ValidationContext, forehead_y: float, chin_y: float) -> Tu
     return max(float(top), forehead_y - _MAX_HAIR_ABOVE_FOREHEAD * face_height), 'mask'
 
 
-def check_face_size(context: ValidationContext):
+def check_face_size(context: ValidationContext, warn_below: float = 0.70, warn_above: float = 0.80,
+                    fail_below: float = 0.60, fail_above: float = 0.85):
     """Check that the head (chin to crown) covers 70-80% of the photo height.
 
     The German rule is 32-36 mm of a 45 mm photo, i.e. 71-80%.
 
-    :param context: The validation context containing the image and results.
+    :param warn_below: Head height as a share of the photo height below which it warns.
+    :param warn_above: Share above which it warns.
+    :param fail_below: Share below which it fails (the head is far too small).
+    :param fail_above: Share above which it fails (the head is far too large).
     """
     bbox = _bbox(context)
     lm = _landmarks(context)
@@ -76,22 +80,23 @@ def check_face_size(context: ValidationContext):
     context.measurements['crown_y'] = float(crown_y)
     context.measurements['chin_y'] = float(chin_y)
 
-    if head_height_ratio < 0.60:
+    wanted = f'{warn_below * 100:.0f}-{warn_above * 100:.0f}%'
+    if head_height_ratio < fail_below:
         context.issues.append(ValidationIssue(
             category='error',
-            message=f'Head is too small ({head_height_ratio * 100:.1f}% of the photo height). Should be 70-80%.',
+            message=f'Head is too small ({head_height_ratio * 100:.1f}% of the photo height). Should be {wanted}.',
             severity=9
         ))
-    elif head_height_ratio > 0.85:
+    elif head_height_ratio > fail_above:
         context.issues.append(ValidationIssue(
             category='error',
-            message=f'Head is too large ({head_height_ratio * 100:.1f}% of the photo height). Should be 70-80%.',
+            message=f'Head is too large ({head_height_ratio * 100:.1f}% of the photo height). Should be {wanted}.',
             severity=9
         ))
-    elif head_height_ratio < 0.70 or head_height_ratio > 0.80:
+    elif head_height_ratio < warn_below or head_height_ratio > warn_above:
         context.issues.append(ValidationIssue(
             category='warning',
-            message=f'Head height ({head_height_ratio * 100:.1f}%) is outside the optimal range (70-80%).',
+            message=f'Head height ({head_height_ratio * 100:.1f}%) is outside the optimal range ({wanted}).',
             severity=5
         ))
 

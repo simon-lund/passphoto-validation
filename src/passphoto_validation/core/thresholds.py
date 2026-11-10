@@ -10,9 +10,19 @@ The keyword names are those of the check functions. `warn_above` / `fail_above` 
 defaults of its function signature (`photo_format`, `face_size`, `face_centered`, `contrast`,
 `background_uniformity`, `background_consistency`, `glare`); `resolution` takes its minimums from
 `ValidatorConfig`, where they can be set per deployment.
+
+A deployment can override any parameter of any check without editing this file: a TOML thresholds file
+(`ValidatorConfig.thresholds_file`, `passport-validator --thresholds`), one table per check, is read by
+`load_overrides` and merged by `apply_overrides`, which refuses unknown checks, unknown parameters and
+wrong types. `to_toml` writes every parameter with its current value, to start such a file from. The file
+is applied last, after this table and `ValidatorConfig` (so its `[resolution]` wins over `MIN_RES_*`).
 """
+import inspect
+import textwrap
+import tomllib
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from numbers import Real
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -33,6 +43,14 @@ THRESHOLDS: Dict[str, Thresholds] = {
     'exposure': Thresholds(
         dict(warn_below=75, fail_below=60),
         'L* of the brightest 1% (the background), so dark skin is not read as underexposed; the darkened variant fails'),
+    'colour_cast': Thresholds(
+        dict(warn_above=12, fail_above=20),
+        'CIELAB chroma the background and the whites of the eyes share in hue. Every London crop that should '
+        'pass measures 0 (the backdrop is neutral) and every colour-cast variant 34 or more, so the London Set '
+        'sets no threshold; the numbers come from 219 real candid photos judged by eye: above 20 (11 photos, 7 '
+        'of them already failed by OFIQ) the tint is plain, 14-20 is warm indoor light, 10-13 mixed. A cast on '
+        'the face alone reads 0 (that is OFIQ\'s case), so does one that cancels a coloured background; dark '
+        'lenses are read as eye whites (ofiq_eyes_visible fails those photos)'),
     'background_brightness': Thresholds(
         dict(min_brightness=120, fail_below=80),
         'Fails on dark backgrounds, warns on mid-tones: every Open Images background labelled dark is below 80, '
@@ -142,3 +160,119 @@ def warn_fail(name: str) -> Tuple[Optional[float], Optional[float]]:
     warn = next((kwargs[key] for key in _WARN_KEYS if key in kwargs), None)
     fail = next((kwargs[key] for key in _FAIL_KEYS if key in kwargs), None)
     return warn, fail
+
+
+# --- The thresholds file: every parameter of every check, overridable per deployment
+
+Check = Tuple[str, Callable, Dict[str, Any]]  # (name, function, keyword arguments), as the validator registers them
+
+
+class ThresholdsFileError(ValueError):
+    """A thresholds file names a check or a parameter the validator does not have, or gives a wrong type."""
+
+
+def load_overrides(path: str) -> Dict[str, Dict[str, Any]]:
+    """Read a TOML thresholds file: one table per check, whose keys are the check's parameters."""
+    try:
+        with open(path, 'rb') as f:
+            data = tomllib.load(f)
+    except FileNotFoundError:
+        raise ThresholdsFileError(f'{path}: no such file')
+    except tomllib.TOMLDecodeError as exc:
+        raise ThresholdsFileError(f'{path}: not valid TOML ({exc})')
+    for name, values in data.items():
+        if not isinstance(values, dict):
+            raise ThresholdsFileError(f'{path}: [{name}] must be a table of parameters, one per line, not a value')
+    return data
+
+
+def parameters(check: Callable, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """The parameters of `check` a thresholds file may set, with the values it runs with: the keyword arguments
+    the validator passes, then the function's own defaults. Names (an axis, a measure name) and debug flags are
+    not parameters."""
+    found = {}
+    for name, parameter in inspect.signature(check).parameters.items():
+        if name == 'context' or name == 'debug':
+            continue
+        value = kwargs.get(name, parameter.default)
+        if value is inspect.Parameter.empty or isinstance(value, str):
+            continue
+        found[name] = value
+    return found
+
+
+def _kind(value: Any) -> Optional[str]:
+    if isinstance(value, bool):
+        return 'true or false'
+    if isinstance(value, Real):
+        return 'number'
+    if isinstance(value, (tuple, list)):
+        return 'list of numbers'
+    return None
+
+
+def apply_overrides(checks: List[Check], overrides: Dict[str, Dict[str, Any]], source: str = 'thresholds file') -> List[Check]:
+    """The check list with `overrides` merged into each check's keyword arguments.
+
+    Every check name, parameter name and value type is checked first, so a typo fails loudly when the
+    validator starts rather than silently keeping the default.
+    """
+    by_name = {name: (check, kwargs) for name, check, kwargs in checks}
+    unknown = [name for name in overrides if name not in by_name]
+    if unknown:
+        raise ThresholdsFileError(f'{source}: no check called {", ".join(unknown)}. The checks are: {", ".join(by_name)}')
+    merged = []
+    for name, check, kwargs in checks:
+        new_kwargs = dict(kwargs)
+        allowed = parameters(check, kwargs)
+        for key, value in overrides.get(name, {}).items():
+            if key not in allowed:
+                takes = ', '.join(allowed) if allowed else 'no parameters'
+                raise ThresholdsFileError(f'{source}: [{name}] has no parameter {key}. It takes: {takes}')
+            current = allowed[key]
+            if current is None:
+                kind = _kind(value)
+            else:
+                kind = _kind(current)
+            if kind != _kind(value) or kind is None:
+                raise ThresholdsFileError(f'{source}: [{name}] {key} must be a {kind or "number"}, not {value!r}')
+            new_kwargs[key] = tuple(value) if isinstance(current, tuple) else value
+        merged.append((name, check, new_kwargs))
+    return merged
+
+
+def _toml_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return 'true' if value else 'false'
+    if isinstance(value, (tuple, list)):
+        return '[' + ', '.join(_toml_value(v) for v in value) + ']'
+    if isinstance(value, float):
+        return repr(float(value))
+    return str(value)
+
+
+def to_toml(checks: List[Check]) -> str:
+    """Every parameter of every check with the value it runs with, as TOML: the file to edit and pass back."""
+    lines = [
+        '# Every parameter of every check, with the value the validator runs with.',
+        '# Keep the lines to change and delete the rest, then point the validator at the file:',
+        '#   uv run passport-validator validate photo.jpg --thresholds thresholds.toml',
+        '#   THRESHOLDS_FILE=thresholds.toml uv run passport-validator-api',
+        '# A section is a check, its keys are the parameters of that check (core/thresholds.py says where',
+        '# the calibrated numbers came from; the others are the defaults of the check functions).',
+        '',
+    ]
+    for name, check, kwargs in checks:
+        found = parameters(check, kwargs)
+        if not found:
+            continue
+        lines.append(f'[{name}]')
+        if name in THRESHOLDS:
+            lines.extend(textwrap.wrap(THRESHOLDS[name].note, 100, initial_indent='# ', subsequent_indent='# '))
+        for key, value in found.items():
+            if value is None:
+                lines.append(f'# {key}: unset')
+            else:
+                lines.append(f'{key} = {_toml_value(value)}')
+        lines.append('')
+    return '\n'.join(lines)

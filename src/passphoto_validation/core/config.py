@@ -60,6 +60,11 @@ class ValidatorConfig(BaseSettings):
         default=4,
         description="PyTorch threads for SigLIP; with several validators in parallel, keep threads x workers at the core count."
     )
+    thresholds_file: Optional[str] = Field(
+        default=None,
+        description="A TOML file that overrides check parameters, one table per check. "
+                    "`passport-validator thresholds` writes every parameter with its current value to start from."
+    )
 
     class Config:
         # Optional: if you want to support a .env file

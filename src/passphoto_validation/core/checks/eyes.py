@@ -6,19 +6,12 @@ import numpy as np
 
 from ..models import CheckSkipped, ValidationContext, ValidationIssue
 from ..ofiq import LANDMARK_LEFT_EYE, LANDMARK_RIGHT_EYE, PARSING_LABELS
+from ..utils import mesh_points
 
 # MediaPipe face mesh indices with refine_landmarks=True: outer corner, inner corner, upper lid, lower lid,
 # iris centre, and the four iris edge points
-_MP_RIGHT_EYE = dict(outer=33, inner=133, upper=159, lower=145, iris=468, ring=(469, 470, 471, 472))
-_MP_LEFT_EYE = dict(outer=263, inner=362, upper=386, lower=374, iris=473, ring=(474, 475, 476, 477))
-
-
-def _mesh(context: ValidationContext):
-    landmarks = context.face_data.get('landmarks')
-    if not landmarks or len(landmarks.landmark) < 478:
-        raise CheckSkipped('No iris landmarks found.')
-    w, h = context.width, context.height
-    return np.array([(p.x * w, p.y * h) for p in landmarks.landmark])
+MP_RIGHT_EYE = dict(outer=33, inner=133, upper=159, lower=145, iris=468, ring=(469, 470, 471, 472))
+MP_LEFT_EYE = dict(outer=263, inner=362, upper=386, lower=374, iris=473, ring=(474, 475, 476, 477))
 
 
 def _gaze_offset(points: np.ndarray, eye: dict) -> Tuple[float, float]:
@@ -42,9 +35,9 @@ def check_gaze(context: ValidationContext, warn_above: float, fail_above: float)
     :param warn_above: Mean horizontal or vertical iris offset (share of eye width) above which it warns.
     :param fail_above: Offset above which it fails.
     """
-    points = _mesh(context)
-    right = _gaze_offset(points, _MP_RIGHT_EYE)
-    left = _gaze_offset(points, _MP_LEFT_EYE)
+    points = mesh_points(context, iris=True)
+    right = _gaze_offset(points, MP_RIGHT_EYE)
+    left = _gaze_offset(points, MP_LEFT_EYE)
     horizontal = (right[0] + left[0]) / 2
     vertical = (right[1] + left[1]) / 2
     context.measurements['gaze_horizontal'] = float(horizontal)
@@ -75,12 +68,12 @@ def check_red_eyes(context: ValidationContext, fail_above: float, pupil_share: f
     :param pupil_share: Pupil radius as a share of the iris radius.
     :param redder_than_skin: How many times as red as the skin below the eye a pupil pixel must be.
     """
-    points = _mesh(context)
+    points = mesh_points(context, iris=True)
     b, g, r = (context.image_np[..., i].astype(np.float32) for i in range(3))
     redness = r / np.maximum(1, np.maximum(g, b))
 
     shares = []
-    for eye in (_MP_RIGHT_EYE, _MP_LEFT_EYE):
+    for eye in (MP_RIGHT_EYE, MP_LEFT_EYE):
         centre = points[eye['iris']]
         width = np.linalg.norm(points[eye['inner']] - points[eye['outer']])
         pupil = _disk(context, centre, pupil_share * np.mean([np.linalg.norm(points[i] - centre) for i in eye['ring']]))

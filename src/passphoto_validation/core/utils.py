@@ -3,6 +3,21 @@ import numpy as np
 from PIL import ImageOps
 from PIL.Image import Image
 
+from .models import CheckSkipped, ValidationContext
+
+
+def mesh_points(context: ValidationContext, iris: bool = False) -> np.ndarray:
+    """The face mesh landmarks in pixels, (x, y) per point; with `iris`, the 478-point mesh with the irises.
+
+    Raises CheckSkipped when the photo has none, so a check can call it directly.
+    """
+    landmarks = context.face_data.get('landmarks')
+    if not landmarks:
+        raise CheckSkipped('No facial landmarks found.')
+    if iris and len(landmarks.landmark) < 478:
+        raise CheckSkipped('No iris landmarks found.')
+    return np.array([(p.x * context.width, p.y * context.height) for p in landmarks.landmark])
+
 
 def convert_to_bgr(image: Image) -> np.ndarray:
     """

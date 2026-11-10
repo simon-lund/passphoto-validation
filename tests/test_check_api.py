@@ -165,3 +165,10 @@ def test_html_only_when_the_accept_header_prefers_it(accept, html):
 def test_rules_endpoint_lists_the_catalogue(client):
     body = client.get('/v1/rules').json()
     assert [rule['id'] for rule in body['rules']] == [rule.id for rule in RULES]
+
+
+def test_thresholds_endpoint_lists_what_the_server_runs_with(client):
+    body = client.get('/v1/thresholds').json()
+    assert body['file'] is None
+    assert body['checks']['colour_cast'] == dict(warn_above=12, fail_above=20, min_whites_share=0.02, band_share=0.03)
+    assert body['checks']['ofiq_head_yaw'] == dict(warn_above=5, fail_above=10)

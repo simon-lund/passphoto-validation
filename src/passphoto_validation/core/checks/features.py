@@ -4,12 +4,14 @@ import numpy as np
 
 from ..models import CheckSkipped, ValidationIssue, ValidationContext
 
-def check_glasses(context: ValidationContext):
+def check_glasses(context: ValidationContext, bright_level: int = 240, warn_above: float = 0.02, fail_above: float = 0.05):
     """Check for glare (bright reflections) in the upper half of the face, e.g. on glasses.
 
     This does not detect whether glasses are worn; it only counts near-white pixels.
 
-    :param context: The validation context containing the image and results.
+    :param bright_level: Grey level (0-255) from which a pixel counts as a reflection.
+    :param warn_above: Share of such pixels in the upper half of the face box above which it warns.
+    :param fail_above: Share above which it fails.
     """
     bbox = context.face_data.get('bbox')
     if not bbox:
@@ -25,18 +27,18 @@ def check_glasses(context: ValidationContext):
 
     gray_eyes = cv2.cvtColor(eye_region, cv2.COLOR_BGR2GRAY)
 
-    _, bright_spots = cv2.threshold(gray_eyes, 240, 255, cv2.THRESH_BINARY)
+    _, bright_spots = cv2.threshold(gray_eyes, bright_level, 255, cv2.THRESH_BINARY)
     bright_pixel_ratio = np.sum(bright_spots > 0) / bright_spots.size
 
     context.measurements['eye_reflection_ratio'] = float(bright_pixel_ratio)
 
-    if bright_pixel_ratio > 0.05:
+    if bright_pixel_ratio > fail_above:
         context.issues.append(ValidationIssue(
             category='error',
             message='Glare or reflections detected on glasses. Adjust angle or remove glasses.',
             severity=8
         ))
-    elif bright_pixel_ratio > 0.02:
+    elif bright_pixel_ratio > warn_above:
         context.issues.append(ValidationIssue(
             category='warning',
             message='Possible reflections on glasses detected.',

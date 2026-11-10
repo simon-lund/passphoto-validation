@@ -127,6 +127,13 @@ def list_rules():
     return {'groups': _groups(), 'rules': [asdict(rule) for rule in RULES]}
 
 
+@app.get('/v1/thresholds')
+def list_thresholds(request: Request):
+    """Every parameter of every check with the value this server runs with, and the thresholds file, if any."""
+    validator: PassportPhotoValidator = request.app.state.validator
+    return {'file': validator.config.thresholds_file, 'checks': validator.parameters()}
+
+
 def _error(description: str):
     return {'model': ErrorResponse, 'description': description}
 

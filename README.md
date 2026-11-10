@@ -1,10 +1,10 @@
 # passphoto-validation
 
-Checks a photo against the German ID photo rules (the Fotomustertafel) and says which rules it passes, which it fails and why. 38 checks feed 36 rules. Most face measurements come from [OFIQ](https://github.com/BSI-OFIQ/OFIQ-Project), the BSI's implementation of ISO/IEC 29794-5, the rest from MediaPipe and OpenCV. The answer comes as JSON or as a self-contained HTML report, with a proposed 35×45 mm crop when the framing is off.
+Checks a photo against the German ID photo rules (the Fotomustertafel) and says which rules it passes, which it fails and why. 39 checks feed 36 rules. Most face measurements come from [OFIQ](https://github.com/BSI-OFIQ/OFIQ-Project), the BSI's implementation of ISO/IEC 29794-5, the rest from MediaPipe and OpenCV. The answer comes as JSON or as a self-contained HTML report, with a proposed 35×45 mm crop when the framing is off.
 
 ![The HTML report for a sample photo: the verdict, the rules to fix with the reason for each, and the planned 35×45 crop that would make the photo valid](docs/report.png)
 
-The Jupyter notebooks are the UI: `notebooks/pipeline_overview.ipynb` walks through the pipeline on the sample photos, `notebooks/evaluation.ipynb` shows how every check does on about 2,850 labelled photos and why the thresholds are where they are, `notebooks/stichprobe.ipynb` draws a random sample of those photos and shows each with its label and the validator's verdict, to check the claims by eye, `notebooks/api.ipynb` talks to the API. [PASSPORT_VALIDATOR.md](PASSPORT_VALIDATOR.md) has the architecture, the list of checks, the report format and the measured accuracy.
+The Jupyter notebooks are the UI: `notebooks/pipeline_overview.ipynb` walks through the pipeline on the sample photos, `notebooks/evaluation.ipynb` shows how every check does on about 2,850 labelled photos and why the thresholds are where they are, `notebooks/stichprobe.ipynb` draws a random sample of those photos and shows each with its label and the validator's verdict, to check the claims by eye, `notebooks/api.ipynb` talks to the API. [docs/architecture.md](docs/architecture.md) is the one-page map of the pipeline, with a diagram; [PASSPORT_VALIDATOR.md](PASSPORT_VALIDATOR.md) has the list of checks, the report format and the measured accuracy.
 
 ## Install
 
@@ -66,6 +66,20 @@ The tests (the OFIQ ones run when `.env` points at OFIQ, otherwise they are skip
 ```bash
 uv run --extra test pytest
 ```
+
+## Thresholds
+
+Every warn and fail threshold lives in one table, `src/passphoto_validation/core/thresholds.py`, each with a note on where the number came from. To run with other numbers without editing the code, write every parameter of every check to a file, keep the lines to change and pass the file back:
+
+```bash
+uv run passport-validator thresholds > thresholds.toml
+```
+
+```bash
+uv run passport-validator validate tests/test-images/9.jpg --thresholds thresholds.toml
+```
+
+The API reads the same file from `THRESHOLDS_FILE` (or `.env`) and lists what it runs with at `/v1/thresholds`. A file that names a check or a parameter that does not exist, or gives a wrong type, stops the command or the server with a message, so a typo never silently keeps the default. The file is applied last, so its `[resolution]` values win over `MIN_RES_WIDTH` and the other resolution settings of the environment.
 
 ## Evaluation data
 

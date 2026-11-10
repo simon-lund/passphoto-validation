@@ -60,7 +60,7 @@ def test_original_passes_the_classic_checks(validator, photo):
     statuses = _statuses(validator, photo)
     for name in ('exposure', 'face_sharpness', 'compression', 'red_eyes', 'gaze', 'background_brightness',
                  'background_pattern', 'background_gradient', 'background_shadow', 'print_defects', 'skin_smoothing',
-                 'skin_colour_patches'):
+                 'skin_colour_patches', 'colour_cast'):
         assert statuses[name] == 'pass', name
 
 
@@ -220,9 +220,33 @@ def test_red_pupils_fail_red_eyes(validator, photo):
     assert _statuses(validator, _red_pupils(photo))['red_eyes'] == 'fail'
 
 
+def _warm(image_bgr):
+    # The colour cast of the London Set's colour_cast variant: less blue, more red
+    return np.clip(image_bgr * np.array((0.6, 0.95, 1.3)), 0, 255).astype(np.uint8)
+
+
 def test_warm_colour_cast_passes_red_eyes(validator, photo):
-    warm = np.clip(photo * np.array((0.6, 0.95, 1.3)), 0, 255).astype(np.uint8)
-    assert _statuses(validator, warm)['red_eyes'] == 'pass'
+    assert _statuses(validator, _warm(photo))['red_eyes'] == 'pass'
+
+
+def test_warm_colour_cast_fails_colour_cast(validator, photo):
+    # The grey background and the whites of the eyes turn orange together
+    report = validator(_warm(photo), crop=False)
+    check = {c.name: c for c in report.checks}['colour_cast']
+    assert check.status == 'fail'
+    assert check.measurements['colour_cast'] > 20
+    assert check.measurements['background_colour_b'] > 20 and check.measurements['eye_whites_colour_b'] > 20
+
+
+def test_coloured_background_behind_natural_eyes_is_no_colour_cast(validator, photo):
+    # A light blue backdrop: the background is tinted, the eye whites are not, so nothing is shared
+    blue = photo.copy().astype(np.float32)
+    background = _background(photo)
+    blue[background] = np.clip(blue[background] * np.array((1.15, 1.0, 0.8)), 0, 255)
+    check = {c.name: c for c in validator(blue.astype(np.uint8), crop=False).checks}['colour_cast']
+    assert check.status == 'pass'
+    assert check.measurements['background_colour_b'] < -10
+    assert check.measurements['colour_cast'] < 5
 
 
 def test_without_ofiq_its_checks_are_skipped_with_the_reason(photo):

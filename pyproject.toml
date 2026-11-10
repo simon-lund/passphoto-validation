@@ -1,7 +1,7 @@
 [project]
 name = "passphoto-validation"
 version = "0.1.0"
-description = "Checks a photo against the German ID photo rules (the Fotomustertafel): 38 checks feeding 36 rules, as a CLI, an API and an HTML report."
+description = "Checks a photo against the German ID photo rules (the Fotomustertafel): 39 checks feeding 36 rules, as a CLI, an API and an HTML report."
 keywords = ["passport photo", "ID photo", "Fotomustertafel", "ISO/IEC 29794-5", "OFIQ"]
 readme = "README.md"
 authors = [

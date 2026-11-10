@@ -15,7 +15,7 @@ from .crop import FRAMING_CHECKS, plan_crop
 from .models import CheckResult, CheckSkipped, Crop, PassportPhotoReport, ValidationIssue, ValidationContext
 from .ofiq import load_engine
 from .rules import evaluate_rules
-from .thresholds import thresholds
+from .thresholds import apply_overrides, load_overrides, parameters, thresholds
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,9 @@ class PassportPhotoValidator:
                        loading values from environment variables.
         """
         self.config = config or ValidatorConfig()
+        # The checks and the keyword arguments they run with, resolved once: the thresholds table, then the
+        # deployment's thresholds file on top (a bad file stops the validator here, not on the first photo)
+        self._check_list = self.registered_checks(self.config)
 
         self.face_detection = mp_face_detection.FaceDetection(
             min_detection_confidence=self.config.min_detection_confidence
@@ -131,15 +134,25 @@ class PassportPhotoValidator:
         return self._generate_report(context, results)
 
     def _checks(self) -> List[Tuple[str, Callable, Dict]]:
-        """All checks that run once exactly one face is found, as (name, function, keyword arguments).
+        """All checks that run once exactly one face is found, as (name, function, keyword arguments)."""
+        return self._check_list
+
+    def parameters(self) -> Dict[str, Dict]:
+        """Every parameter of every check with the value this validator runs with, by check name."""
+        return {name: parameters(check, kwargs) for name, check, kwargs in self._check_list}
+
+    @classmethod
+    def registered_checks(cls, config: ValidatorConfig) -> List[Tuple[str, Callable, Dict]]:
+        """The checks that run once exactly one face is found, as (name, function, keyword arguments), with
+        the thresholds file of `config` applied. Needs no models, so the CLI can list the parameters.
 
         The names are part of the API contract (rules refer to them): add new ones, never rename. The
         thresholds come from core/thresholds.py, which also says where each number came from; a check
         without an entry there runs with its function's defaults.
         """
-        return [
+        checks = [
             ('resolution', quality.check_resolution,
-             dict(min_res=self.config.min_res, recommended_res=self.config.recommended_res)),
+             dict(min_res=config.min_res, recommended_res=config.recommended_res)),
             ('photo_format', geometry.check_photo_format, {}),
             ('face_size', geometry.check_face_size, {}),
             ('face_centered', geometry.check_face_centered, {}),
@@ -147,6 +160,7 @@ class PassportPhotoValidator:
             ('compression', quality.check_compression_blocks, thresholds('compression')),
             ('exposure', lighting.check_exposure_level, thresholds('exposure')),
             ('contrast', lighting.check_contrast, {}),
+            ('colour_cast', lighting.check_colour_cast, thresholds('colour_cast')),
             ('background_brightness', background.check_background_brightness, thresholds('background_brightness')),
             ('background_uniformity', background.check_background_uniformity, {}),
             ('background_consistency', background.check_background_consistency, {}),
@@ -157,7 +171,7 @@ class PassportPhotoValidator:
             ('skin_smoothing', retouching.check_skin_smoothing, thresholds('skin_smoothing')),
             ('skin_colour_patches', retouching.check_skin_colour_patches, thresholds('skin_colour_patches')),
             ('glare', features.check_glasses, {}),
-            *self._ofiq_checks(),
+            *cls._ofiq_checks(),
             ('gaze', eyes.check_gaze, thresholds('gaze')),
             ('red_eyes', eyes.check_red_eyes, thresholds('red_eyes')),
             ('glasses_tint', eyes.check_glasses_tint, thresholds('glasses_tint')),
@@ -166,6 +180,9 @@ class PassportPhotoValidator:
             ('siglip_glasses_glare', eyes.check_glasses_glare_siglip, thresholds('siglip_glasses_glare')),
             ('siglip_gaze', eyes.check_gaze_siglip, thresholds('siglip_gaze')),
         ]
+        if config.thresholds_file:
+            checks = apply_overrides(checks, load_overrides(config.thresholds_file), source=config.thresholds_file)
+        return checks
 
     @staticmethod
     def _ofiq_checks() -> List[Tuple[str, Callable, Dict]]:

@@ -1,6 +1,13 @@
-"""The thresholds table is what the validator runs with, and the values are pinned."""
-from passphoto_validation.core import PassportPhotoValidator
-from passphoto_validation.core.thresholds import THRESHOLDS, thresholds, warn_fail
+"""The thresholds table is what the validator runs with, and the values are pinned; a thresholds file overrides them."""
+import re
+import tomllib
+
+import pytest
+from typer.testing import CliRunner
+
+from passphoto_validation.cli import app
+from passphoto_validation.core import PassportPhotoValidator, ValidatorConfig
+from passphoto_validation.core.thresholds import THRESHOLDS, ThresholdsFileError, parameters, thresholds, to_toml, warn_fail
 
 
 def _registered():
@@ -32,6 +39,7 @@ def test_the_table_is_pinned():
         'face_sharpness': dict(warn_below=0.14, fail_below=0.11),
         'compression': dict(warn_above=1.6, fail_above=2.5),
         'exposure': dict(warn_below=75, fail_below=60),
+        'colour_cast': dict(warn_above=12, fail_above=20),
         'background_brightness': dict(min_brightness=120, fail_below=80),
         'background_pattern': dict(warn_above=10, fail_above=20),
         'background_gradient': dict(warn_above=18, fail_above=30),
@@ -81,3 +89,65 @@ def test_thresholds_returns_a_copy():
     kwargs = thresholds('gaze')
     kwargs['warn_above'] = 1
     assert thresholds('gaze')['warn_above'] == 0.08
+
+
+# --- The thresholds file
+
+def _checks(thresholds_file=None):
+    config = ValidatorConfig(ofiq_config_dir=None, thresholds_file=thresholds_file)
+    return PassportPhotoValidator.registered_checks(config)
+
+
+def test_a_thresholds_file_changes_what_the_checks_run_with(tmp_path):
+    file = tmp_path / 'thresholds.toml'
+    file.write_text('[colour_cast]\nfail_above = 15\n\n[background_uniformity]\nvariance_threshold = 150\n\n'
+                    '[face_centered]\nvertical_range = [0.4, 0.7]\n')
+    kwargs = {name: kw for name, _, kw in _checks(str(file))}
+    assert kwargs['colour_cast'] == dict(warn_above=12, fail_above=15)
+    assert kwargs['background_uniformity'] == dict(variance_threshold=150)
+    assert kwargs['face_centered']['vertical_range'] == (0.4, 0.7)
+    # Everything else keeps the table's values
+    assert kwargs['compression'] == thresholds('compression')
+
+
+def test_a_thresholds_file_is_checked_before_any_photo(tmp_path):
+    cases = (
+        ('[colour_caste]\nfail_above = 15\n', 'no check called colour_caste'),
+        ('[colour_cast]\nfail_abov = 15\n', '[colour_cast] has no parameter fail_abov'),
+        ('[colour_cast]\nfail_above = "high"\n', 'must be a number'),
+        ('[colour_cast]\nfail_above = true\n', 'must be a number'),
+        ('[ofiq_head_yaw]\naxis = "roll"\n', 'has no parameter axis'),
+        ('colour_cast = 15\n', 'must be a table'),
+    )
+    for text, message in cases:
+        file = tmp_path / 'thresholds.toml'
+        file.write_text(text)
+        with pytest.raises(ThresholdsFileError, match=re.escape(message)):
+            _checks(str(file))
+    with pytest.raises(ThresholdsFileError, match='no such file'):
+        _checks(str(tmp_path / 'missing.toml'))
+
+
+def test_the_exported_thresholds_file_round_trips(tmp_path):
+    checks = _checks()
+    text = to_toml(checks)
+    data = tomllib.loads(text)
+    assert set(data) == {name for name, check, kwargs in checks if parameters(check, kwargs)}
+    for name, check, kwargs in checks:
+        for key, value in kwargs.items():  # every value the validator passes is in the file, names aside
+            if isinstance(value, str):
+                continue
+            assert data[name][key] == (list(value) if isinstance(value, tuple) else value), (name, key)
+    # Feeding the file back changes nothing
+    file = tmp_path / 'thresholds.toml'
+    file.write_text(text)
+    resolved = [(name, parameters(check, kwargs)) for name, check, kwargs in _checks(str(file))]
+    assert resolved == [(name, parameters(check, kwargs)) for name, check, kwargs in checks]
+
+
+def test_the_cli_prints_the_thresholds_file():
+    result = CliRunner().invoke(app, ['thresholds'])
+    assert result.exit_code == 0, result.output
+    data = tomllib.loads(result.output)
+    assert data['colour_cast'] == dict(warn_above=12, fail_above=20, min_whites_share=0.02, band_share=0.03)
+    assert data['contrast'] == dict(warn_below=30.0)
