@@ -14,8 +14,8 @@ Each photo is cropped to 35x45 like scripts/build_eval_set.py (smaller crops kee
 groups say what the boxes say; what a clerk would reject comes from labels (vlm_labels.jsonl). Keep the
 photos out of the repository; credits.csv lists author, source and licence of each.
 
-    uv run python scripts/build_openimages_set.py --meta ~/datasets/openimages-faces/meta \\
-        --out ~/datasets/openimages-faces/eval --per-group 60
+    uv run python scripts/build_openimages_set.py --meta data/openimages/meta \\
+        --out data/openimages/eval --per-group 60
 """
 import argparse
 import csv

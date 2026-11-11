@@ -1,6 +1,6 @@
 """Score checks against per-photo labels (e.g. vlm_labels.jsonl next to an evaluation set).
 
-    uv run --extra test python scripts/score_labels.py --set ~/datasets/openimages-faces/eval
+    uv run --extra test python scripts/score_labels.py --set data/openimages/eval
 
 For each label, the photos where it says there is a problem are positives, the rest negatives. A check
 counts as flagging a photo when it warns or fails. hit = flagged positives, false_alarm = flagged

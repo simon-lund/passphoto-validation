@@ -1,9 +1,9 @@
 """Page through a photo set and say, photo by photo, whether the pipeline's verdict is right.
 
-    uv run python scripts/review.py --set ../datasets/frl-london-eval --split test --shuffle
-    uv run python scripts/review.py --set ../datasets/openimages-faces/eval
-    uv run python scripts/review.py --set ../datasets/frl-london-eval --check colour_cast=warn
-    uv run python scripts/review.py --set ../datasets/frl-london-eval --summary
+    uv run python scripts/review.py --set data/london-eval --split test --shuffle
+    uv run python scripts/review.py --set data/openimages/eval
+    uv run python scripts/review.py --set data/london-eval --check colour_cast=warn
+    uv run python scripts/review.py --set data/london-eval --summary
 
 Serves one page at http://127.0.0.1:9700: the photo with what the pipeline saw drawn over it (the person
 mask and the band next to it, the face box with crown and chin, the face mesh, the eye contours and irises,

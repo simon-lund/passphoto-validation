@@ -1,6 +1,6 @@
 """Summarise results from run_eval.py, per rule and per check.
 
-    uv run --extra test python scripts/eval_report.py --set ~/datasets/frl-london-eval [--split test]
+    uv run --extra test python scripts/eval_report.py --set data/london-eval [--split test]
         [--compare results_classic.jsonl]
 
 Per rule: how often the rule a defect variant breaks ends as fail (caught) or warn, and how often

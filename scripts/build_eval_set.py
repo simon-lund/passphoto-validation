@@ -9,7 +9,7 @@ Every output photo has a known label: the compliant crop of the neutral photo, t
 3/4 photos (cropped the same way), and synthetic defects made from the compliant crop (each breaks
 exactly one rule). The manifest lists which rule each variant breaks.
 
-    uv run python scripts/build_eval_set.py --source ~/datasets/frl-london --out ~/datasets/frl-london-eval
+    uv run python scripts/build_eval_set.py --source data/london --out data/london-eval
 """
 import argparse
 import csv

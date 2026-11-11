@@ -1,6 +1,6 @@
 """Make a small set of test photos with known defects from a folder of frontal portraits.
 
-    uv run python scripts/make_test_photos.py --source ../datasets/frl-london/neutral_front --out ../datasets/test-photos --count 100
+    uv run python scripts/make_test_photos.py --source data/london/neutral_front --out data/test-photos --count 100
 
 Takes portraits from --source (any folder of frontal photos with one face in them: the London Set's
 neutral_front after scripts/download_london_set.py, or your own photos), crops each to a compliant 35x45
@@ -11,8 +11,8 @@ variants; --seed decides which portrait gets which variant, --variants limits th
 Writes manifest.csv (file, identity, split, variant, broken_rule) next to the photos, the same shape as the
 evaluation set, so scripts/run_eval.py and notebooks/stichprobe.ipynb work on the folder:
 
-    uv run python scripts/run_eval.py --set ../datasets/test-photos
-    LONDON_SET=../datasets/test-photos uv run --extra test jupyter lab notebooks/stichprobe.ipynb
+    uv run python scripts/run_eval.py --set data/test-photos
+    LONDON_SET=data/test-photos uv run --extra test jupyter lab notebooks/stichprobe.ipynb
 
 Photos derived from the London Set stay under its consent terms: don't commit or redistribute them.
 """

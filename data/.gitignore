@@ -1,0 +1,9 @@
+# The photo sets live here and never enter git: the London Set's consent covers studies, not
+# redistribution, and everything derived from its photos stays with them (see README.md).
+# Only this file, the README and the review answers are tracked.
+*
+!.gitignore
+!README.md
+!london-eval/
+london-eval/*
+!london-eval/reviews.jsonl

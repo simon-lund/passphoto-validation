@@ -1,6 +1,6 @@
 """Download the Face Research Lab London Set, the photos behind the evaluation.
 
-    uv run python scripts/download_london_set.py --out ../datasets/frl-london
+    uv run python scripts/download_london_set.py --out data/london
 
 Fetches the four photo sets the evaluation uses (neutral and smiling front views, left and right 3/4
 views; 136 MB) and the info sheet from figshare (DeBruine & Jones 2017, CC BY 4.0,
@@ -11,7 +11,7 @@ Files already there with the right MD5 are not downloaded again, so the script c
 The subjects consented to use "in lab-based and web-based studies"; keep the photos and anything derived
 from them out of the repository and don't redistribute them. Then build the evaluation set:
 
-    uv run python scripts/build_eval_set.py --source ../datasets/frl-london --out ../datasets/frl-london-eval
+    uv run python scripts/build_eval_set.py --source data/london --out data/london-eval
 """
 import argparse
 import hashlib
@@ -96,7 +96,7 @@ def main():
 
     photos = sum(1 for _ in args.out.rglob('*.jpg'))
     print(f'{photos} photos in {args.out}. Next:\n'
-          f'  uv run python scripts/build_eval_set.py --source {args.out} --out {args.out.parent / "frl-london-eval"}')
+          f'  uv run python scripts/build_eval_set.py --source {args.out} --out {args.out.parent / "london-eval"}')
 
 
 if __name__ == '__main__':

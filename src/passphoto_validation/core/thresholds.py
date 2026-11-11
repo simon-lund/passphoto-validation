@@ -71,7 +71,7 @@ THRESHOLDS: Dict[str, Thresholds] = {
     'background_pattern': Thresholds(
         dict(warn_above=10, fail_above=20),
         'The London Set\'s plain backgrounds stay below 7 at 1063 px height (below 14 at 800 px); the faint UN '
-        'flag in Open Images measures 34 (background labels: openimages-faces/eval/vlm_background_labels.jsonl)'),
+        'flag in Open Images measures 34 (background labels: data/openimages/eval/vlm_background_labels.jsonl)'),
     # The four youngest checks: calibrated on the London Set's compliant crops and synthetic defects built from them
     # (scripts/build_eval_set.py: bg_gradient, bg_shadow, ink_stain, smoothed)
     'background_gradient': Thresholds(

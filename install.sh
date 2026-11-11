@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Install everything the validator needs: the Python environment, OFIQ (built once, next to this repo)
-# and the .env that points at it. Safe to run again: finished steps are skipped.
+# Install everything the validator needs: the Python environment, OFIQ (the submodule under third_party/,
+# built once) and the .env that points at it. Safe to run again: finished steps are skipped.
 #
 #   ./install.sh                 Python environment + OFIQ
 #   ./install.sh --siglip        also the SigLIP second opinions (PyTorch CPU; 3.3 GB model on first use)
 #   ./install.sh --without-ofiq  Python environment only (the OFIQ checks then report "skipped")
 #
 # Environment:
-#   OFIQ_PROJECT_DIR   where OFIQ is, or gets cloned to (default: ../OFIQ-Project, next to this repo)
-#   OFIQ_VERSION       the OFIQ tag to clone (default: v1.2.1)
+#   OFIQ_PROJECT_DIR   where OFIQ is, or gets cloned to (default: third_party/OFIQ-Project, the submodule)
+#   OFIQ_VERSION       the OFIQ tag to clone when OFIQ_PROJECT_DIR is not the submodule (default: v1.2.1)
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OFIQ_PROJECT_DIR="${OFIQ_PROJECT_DIR:-$(dirname "$REPO")/OFIQ-Project}"
+OFIQ_PROJECT_DIR="${OFIQ_PROJECT_DIR:-$REPO/third_party/OFIQ-Project}"
 OFIQ_VERSION="${OFIQ_VERSION:-v1.2.1}"
 CONAN_VERSION=2.18.1
 WITH_OFIQ=1
@@ -70,9 +70,12 @@ extras=(--extra test)
 (cd "$REPO" && uv sync "${extras[@]}" --inexact)
 
 if [ "$WITH_OFIQ" = 1 ]; then
-  # --- 3. OFIQ source
-  if [ -d "$OFIQ_PROJECT_DIR/.git" ]; then
+  # --- 3. OFIQ source: the submodule (a clone without --recursive gets it here), or a clone elsewhere
+  if [ -e "$OFIQ_PROJECT_DIR/.git" ] && [ -f "$OFIQ_PROJECT_DIR/CMakeLists.txt" ]; then
     say "OFIQ checkout found at $OFIQ_PROJECT_DIR"
+  elif [ "$OFIQ_PROJECT_DIR" = "$REPO/third_party/OFIQ-Project" ]; then
+    say "Fetching the OFIQ submodule"
+    (cd "$REPO" && git submodule update --init --depth 1 third_party/OFIQ-Project)
   else
     say "Cloning OFIQ $OFIQ_VERSION into $OFIQ_PROJECT_DIR"
     git clone --branch "$OFIQ_VERSION" --depth 1 https://github.com/BSI-OFIQ/OFIQ-Project.git "$OFIQ_PROJECT_DIR"
@@ -106,6 +109,11 @@ if [ "$WITH_OFIQ" = 1 ]; then
   # --- 6. Tell the validator where OFIQ's config and models are. .env is gitignored and read from the repo root.
   say "Settings"
   write_env OFIQ_CONFIG_DIR "$OFIQ_PROJECT_DIR/data"
+  # A config that limits OFIQ to 3 threads, for scripts/run_eval.py with several workers (OFIQ_CONFIG_FILE=ofiq_config_eval.jaxn)
+  if [ ! -f "$OFIQ_PROJECT_DIR/data/ofiq_config_eval.jaxn" ]; then
+    sed 's/"ort_intra_threads": 0/"ort_intra_threads": 3/' "$OFIQ_PROJECT_DIR/data/ofiq_config.jaxn" > "$OFIQ_PROJECT_DIR/data/ofiq_config_eval.jaxn"
+    echo "ofiq_config_eval.jaxn written (3 ORT threads, for the evaluation runs)"
+  fi
 fi
 if [ "$WITH_SIGLIP" = 1 ]; then
   [ "$WITH_OFIQ" = 1 ] || say "Settings"

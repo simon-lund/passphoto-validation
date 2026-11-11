@@ -1,6 +1,6 @@
 # passphoto-decisions
 
-The baseline for [passphoto-validation](https://github.com/simon-lund/passphoto-validation): the same 36 German ID photo rules (the Fotomustertafel), judged not by a pipeline of face models and pixel checks but by one call to [OpenAI's Decisions API](https://developers.openai.com/api/docs/guides/decisions). Each rule is a yes/no question about the photo; the API answers with the probability that the rule is broken, and a threshold pair turns that into `pass`, `warn` or `fail`. If the hand-built pipeline can't beat this, it isn't worth its complexity.
+The baseline for [passphoto-validation](https://github.com/simon-lund/passphoto-validation), kept in its `baseline/` folder with its own environment (`cd baseline && uv sync`; the OpenAI key goes into `baseline/.env`): the same 36 German ID photo rules (the Fotomustertafel), judged not by a pipeline of face models and pixel checks but by one call to [OpenAI's Decisions API](https://developers.openai.com/api/docs/guides/decisions). Each rule is a yes/no question about the photo; the API answers with the probability that the rule is broken, and a threshold pair turns that into `pass`, `warn` or `fail`. If the hand-built pipeline can't beat this, it isn't worth its complexity.
 
 One request per photo: a developer message with the framing, the photo as a base64 JPEG, a `choice` question that counts the faces (the gate: anything but exactly one face skips every rule) and 36 `predicate` questions, one per rule, named by the rule id. Rule ids, groups and titles are the ones passphoto-validation uses, so the two can be laid side by side.
 
@@ -45,13 +45,13 @@ Options on `check` and `batch`: `--warn-at` and `--fail-at` (the thresholds on t
 `batch` sends every photo of an evaluation set built by passphoto-validation's `scripts/build_eval_set.py` (a folder with `manifest.csv`) and writes `results_decisions.jsonl` next to it, in the shape its `scripts/run_eval.py` writes: the manifest row, `checks` (the gate as `face_detected`, each rule once more as a check whose measurement is the probability) and `rules` (rule id to status). Photos already in the output are skipped, so an interrupted run continues where it stopped. A rate limit (HTTP 429) is waited out, up to about two minutes per photo; a request that still fails becomes a row with an `error` on `face_detected` and every rule `skipped`, and the next run sends that photo again. Four parallel requests stay under the usual per-minute token limit; eight did not.
 
 ```bash
-uv run passphoto-decisions batch ../datasets/frl-london-eval --yes
+cd baseline && uv run passphoto-decisions batch ../data/london-eval --yes
 ```
 
-Without `--yes` it only says how many photos it would send. Then, from the passphoto-validation checkout, compare the two per rule (caught, warned, false fails and false warns on photos that should pass):
+Without `--yes` it only says how many photos it would send. Then, from the repository root, compare the two per rule (caught, warned, false fails and false warns on photos that should pass):
 
 ```bash
-uv run --extra test python scripts/eval_report.py --set ../datasets/frl-london-eval --results results_decisions.jsonl --compare results.jsonl --split test
+uv run --extra test python scripts/eval_report.py --set data/london-eval --results results_decisions.jsonl --compare results.jsonl --split test
 ```
 
 Only the rule tables are meaningful there; its per-check table looks for the pipeline's check names, which this baseline doesn't have.

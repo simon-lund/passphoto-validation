@@ -1,6 +1,6 @@
 """Run the validator on every photo of an evaluation set and save each check's and rule's result.
 
-    OFIQ_CONFIG_DIR=<OFIQ>/data uv run python scripts/run_eval.py --set ~/datasets/frl-london-eval
+    OFIQ_CONFIG_DIR=<OFIQ>/data uv run python scripts/run_eval.py --set data/london-eval
 
 With several workers, give OFIQ a config that limits its threads (OFIQ_CONFIG_FILE, e.g. a copy of
 ofiq_config.jaxn with "ort_intra_threads": 3), or the workers starve each other.
