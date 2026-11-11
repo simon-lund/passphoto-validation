@@ -1,0 +1,6 @@
+[submodule "third_party/OFIQ-Project"]
+	path = third_party/OFIQ-Project
+	url = https://github.com/BSI-OFIQ/OFIQ-Project.git
+	ignore = dirty
+	shallow = true
+	branch = v1.2.1
