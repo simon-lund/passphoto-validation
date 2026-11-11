@@ -235,6 +235,8 @@ The German ID photo rules (Fotomustertafel) are listed in `core/rules.py`: 36 ru
 
 A photo is valid (`is_valid`) only when no check reports an error, no check crashed, **and** no rule is `skipped`: a photo the pipeline couldn't judge is never valid. `skipped_rules` lists those rules; each one's `reasons` say why. A `not_checked` rule (one whose checks a thresholds file turned off) doesn't count against a photo, since no photo could pass it. Without OFIQ, every rule only OFIQ covers is skipped, so no photo is valid.
 
+Since one defect usually breaks several rules, `problems` groups the rules that did not pass by the check that caused it (one entry per check that failed, warned or could not run, with its reasons, the first sentence as `headline`, the `rules` it decided and, when its failure stopped other checks, the rules those left `not_judged`), and `CHECK_DEPENDENCIES` in `core/validator.py` names the checks that are not run once another has failed: a failed `ofiq_eyes_visible` leaves the eye checks and `colour_cast` as `skipped` with "Not judged: <its reason>", and the rules only they cover (`eyes_open`, `no_red_eyes`, `eyes_facing_camera`, `glasses_no_reflections`) skipped with that reason.
+
 26 rules are fully covered and 10 partly; each rule's `note` says what its checks leave out. The last rules to get a check were background shadows, colour gradients, print errors such as ink stains, and retouching (skin smoothing, then coloured stickers and whole-face filters); these are the youngest checks, calibrated on synthetic defects only (see the table below), so treat their verdicts with more care than the rest.
 
 | Source | Checks |
@@ -337,6 +339,16 @@ Most false warnings here fall on photos that fail other rules anyway. On the Lon
     "fixed_rules": ["photo_format"],
     "remaining_rules": []
   },
+  "problems": [
+    {
+      "check": "face_size",
+      "status": "fail",
+      "headline": "Face is too small (39.3% of image).",
+      "reasons": ["Face is too small (39.3% of image). Should be 70-80%."],
+      "rules": ["face_size", "template_zones", "face_height_mm"],
+      "not_judged": []
+    }
+  ],
   "summary": {
     "total_issues": 8,
     "errors": 5,
@@ -354,6 +366,8 @@ Most false warnings here fall on photos that fail other rules anyway. On the Lon
 Every key is present whatever the status; the ones that don't apply are `null` (`reason`, the box, `is_valid`) or empty (`rules_after`, the rule lists).
 
 It never adds background and never changes `is_valid` of the photo as sent; it only says what a crop would give. Photos with framing problems take about twice as long, since the checks run twice; `AUTOCROP=false` turns it off (then `crop` is `null`). `suggested_crop` is the older suggestion (3:4, face at 40%) and stays for compatibility; use `crop`.
+
+**`problems`** is the same verdict read by cause: every rule that is `fail`, `warn` or `skipped` appears under the check that decided it, fails first, then warnings, then the checks that could not judge the photo (see the rules section above).
 
 ## Benefits of Modular Architecture
 

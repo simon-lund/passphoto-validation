@@ -81,9 +81,10 @@ def render_report(payload: dict, image: Image.Image, filename: Optional[str] = N
         json_filename=f'{Path(filename).stem if filename else "report"}.json',
         groups=groups,
         other_checks=[check for check in payload['checks'] if check['name'] not in in_a_rule],
-        # Failing rules first, then warnings; skipped rules get their own box
-        problems=[rule for status in ('fail', 'warn') for rule in payload['rules'] if rule['status'] == status],
-        skipped_rules=[rule for rule in payload['rules'] if rule['id'] in payload['skipped_rules']],
+        # The rules that did not pass, by cause: what the checks found (fails first, then warnings), and the
+        # checks that could not judge the photo, each in its own box
+        problems=[problem for problem in payload['problems'] if problem['status'] in ('fail', 'warn')],
+        not_judged=[problem for problem in payload['problems'] if problem['status'] in ('skipped', 'error')],
         flat_title=flat_title,
         crop_proposed=bool(payload.get('crop')) and payload['crop']['status'] == 'proposed',
         crop_rows=_crop_rows(payload),
@@ -96,6 +97,7 @@ def render_report(payload: dict, image: Image.Image, filename: Optional[str] = N
         fmt=_format_value,
         pct=_percent,
         breakable=_breakable,
+        detail=_detail,
     )
 
 
@@ -113,6 +115,12 @@ def _crop_rows(payload: dict) -> list:
     after = crop.get('rules_after') or {}
     return [dict(rule, after=after[rule['id']]) for rule in payload['rules']
             if rule['id'] in after and (after[rule['id']] != rule['status'] or after[rule['id']] in ('fail', 'skipped'))]
+
+
+def _detail(problem: dict) -> str:
+    # What a problem's reasons say beyond its headline
+    text = ' '.join(reason.strip() for reason in problem['reasons'] if reason.strip())
+    return text[len(problem['headline']):].strip() if text.startswith(problem['headline']) else text
 
 
 def _json_uri(payload: dict) -> str:

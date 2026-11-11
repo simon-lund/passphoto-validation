@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .core.models import CheckStatus, CropStatus, RuleStatus
+from .core.models import CheckStatus, CropStatus, ProblemStatus, RuleStatus
 
 
 class _Exact(BaseModel):
@@ -60,6 +60,16 @@ class RuleResult(_Exact):
     note: Optional[str] = Field(description='What the checks leave out.')
 
 
+class Problem(_Exact):
+    """One cause behind the rules that did not pass: a check that did not pass, and the rules it decided."""
+    check: str = Field(description='The check that caused it, as named in `checks`.')
+    status: ProblemStatus = Field(description='The check\'s status: fail or warn when it found something, skipped or error when it could not judge the photo.')
+    headline: str = Field(description='The first sentence of the first reason, for a one-line view.')
+    reasons: List[str] = Field(description='The check\'s reasons.')
+    rules: List[str] = Field(description='The rules whose status this check set: the rules it covers that are at its status (a rule two failing checks break is under both), or, for a skipped or crashed check, the ones it left skipped.')
+    not_judged: List[str] = Field(description='Rules skipped because this check\'s failure stopped the checks that cover them (covered eyes stop the eye checks; no face stops every check).')
+
+
 class Crop(_Exact):
     """The 35x45 crop for framing problems. Every key is present whatever the status; the ones that don't
     apply are null or empty."""
@@ -103,6 +113,7 @@ class CheckReport(_Exact):
     rules: List[RuleResult] = Field(description='Every rule of the Fotomustertafel, in catalogue order.')
     skipped_rules: List[str] = Field(description='Rules no check could judge; any of them makes the photo not valid.')
     crop: Optional[Crop] = Field(description='Null when cropping is turned off (AUTOCROP=false).')
+    problems: List[Problem] = Field(description='The rules that did not pass, grouped by the check that caused it: fails, warnings, then what could not be judged. Empty when every rule passes.')
     summary: Summary
     groups: List[Group] = Field(description='The rule groups, in catalogue order.')
     image: ImageSize = Field(description='The photo as checked, after EXIF rotation.')

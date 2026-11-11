@@ -8,10 +8,11 @@
 Serves one page at http://127.0.0.1:9700: the photo with what the pipeline saw drawn over it (the person
 mask and the band next to it, the face box with crown and chin, the face mesh, the eye contours and irises,
 the whites of the eyes, OFIQ's landmarks and face parsing, the planned crop; each layer can be switched off),
-the label when the set has one, and the verdict with every rule that fails or warns and why.
+the label when the set has one, and the verdict as problems: each check that failed, warned or could not run,
+with its reason and the rules it decided, so one defect reads as one problem however many rules it breaks.
 
 Keys: Y or the right arrow when the verdict is right, N or the left arrow when it is wrong, C to write a
-comment first, a click on a rule to mark that rule's status as wrong, S to skip, B to go back. On a touch
+comment first, a click on a rule's chip to mark that rule's status as wrong, S to skip, B to go back. On a touch
 screen, swipe right or left. Each answer is appended to reviews.jsonl next to the set: the file, the answer,
 the rules marked wrong, the comment, the verdict as shown, and the pipeline's git commit and thresholds file.
 Photos already answered are left out on the next run (--again keeps them). --summary prints what the answers
@@ -212,6 +213,7 @@ def verdict(report) -> dict:
         skipped_rules=list(report.skipped_rules),
         rules=[dict(id=r.id, title=r.title, status=r.status, reasons=r.reasons, checks=list(r.checks)) for r in report.rules],
         checks=[dict(name=c.name, status=c.status, reasons=c.reasons, measurements=numbers(c.measurements)) for c in report.checks],
+        problems=[asdict(p) for p in report.problems],
         crop=asdict(report.crop) if report.crop is not None else None,
     )
 

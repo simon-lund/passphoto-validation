@@ -5,10 +5,11 @@ Source: https://www.personalausweisportal.de/SharedDocs/downloads/Webs/PA/DE/inf
 Every rule is listed, including the ones no check covers yet, so a report never hides a rule
 it did not judge. Rule ids are part of the API contract: add new ones, never rename.
 """
+import re
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Literal, Optional, Tuple
+from typing import Dict, Iterable, List, Literal, Mapping, Optional, Sequence, Tuple
 
-from .models import CheckResult, RuleResult
+from .models import CheckResult, Problem, RuleResult
 
 GROUPS: Dict[str, str] = {
     'format_and_size': 'Format and size',
@@ -209,3 +210,64 @@ def evaluate_rules(checks: List[CheckResult], disabled: Iterable[str] = ()) -> L
         ))
 
     return results
+
+
+_PROBLEM_ORDER = {'fail': 0, 'warn': 1, 'skipped': 2, 'error': 3}
+_SENTENCE = re.compile(r'^(.*?[.!?])(?:\s|$)')
+
+
+def headline(reasons: Sequence[str]) -> str:
+    """The first sentence of the first reason, e.g. "Face is too small (39.3% of image)." from
+    "Face is too small (39.3% of image). Should be 70-80%."; '' when there is none."""
+    for reason in reasons:
+        text = reason.strip()
+        if text:
+            match = _SENTENCE.match(text)
+            return match.group(1) if match else text
+    return ''
+
+
+def evaluate_problems(checks: List[CheckResult], rules: List[RuleResult],
+                      dependencies: Mapping[str, Sequence[str]] = {}) -> List[Problem]:
+    """Group the rules that did not pass by the check that caused it: fails first, then warnings, then
+    the checks that could not judge the photo, each in check order.
+
+    Every check that failed or warned is one problem, listing the rules at its status among the ones it
+    covers. A check that could not run is a problem only when it left a rule skipped and no failed root
+    stopped it (`dependencies`: root check -> the checks that cannot measure once it has failed); a check
+    that crashed always is, since that alone makes the photo not valid. The rules the stopped checks left
+    skipped go on the root's problem as not_judged. Together, the problems name every rule that is fail,
+    warn or skipped, and nothing else.
+    """
+    by_name = {check.name: check for check in checks}
+    # The checks a failed root stopped, by name
+    stopped_by: Dict[str, str] = {}
+    for root, dependents in dependencies.items():
+        if root in by_name and by_name[root].status == 'fail':
+            for name in dependents:
+                if name in by_name and by_name[name].status == 'skipped':
+                    stopped_by[name] = root
+
+    problems = []
+    for check in checks:
+        if check.status == 'pass' or check.name in stopped_by:
+            continue
+        if check.status in ('fail', 'warn'):
+            decided = [rule.id for rule in rules if check.name in rule.checks and rule.status == check.status]
+            not_judged = [rule.id for rule in rules if rule.status == 'skipped'
+                          and any(stopped_by.get(name) == check.name for name in rule.checks)]
+        else:
+            decided = [rule.id for rule in rules if check.name in rule.checks and rule.status == 'skipped']
+            not_judged = []
+            if check.status == 'skipped' and not decided:
+                continue
+        problems.append(Problem(
+            check=check.name,
+            status=check.status,
+            headline=headline(check.reasons) or check.name,
+            reasons=list(check.reasons),
+            rules=decided,
+            not_judged=not_judged,
+        ))
+
+    return sorted(problems, key=lambda problem: _PROBLEM_ORDER[problem.status])

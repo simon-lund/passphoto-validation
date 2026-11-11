@@ -1,4 +1,5 @@
-"""The HTML report shows each rule with its own status, escapes what it shows and embeds a small photo."""
+"""The HTML report lists the problems by cause, shows each rule with its own status, escapes what it shows and
+embeds a small photo."""
 import base64
 import io
 import json
@@ -19,6 +20,12 @@ def _rule(rule_id, status, checks, coverage='full', reasons=()):
             'coverage': coverage, 'reasons': list(reasons), 'note': None}
 
 
+def _problem(check, status, reasons, rules, not_judged=()):
+    # The headline is the first sentence of the first reason (the API computes it; here the reasons are one sentence)
+    return {'check': check, 'status': status, 'headline': reasons[0], 'reasons': list(reasons), 'rules': list(rules),
+            'not_judged': list(not_judged)}
+
+
 def _payload(bbox=None, crop=None):
     return {
         'is_valid': False,
@@ -26,6 +33,12 @@ def _payload(bbox=None, crop=None):
         'bbox': bbox,
         'suggested_crop': None,
         'crop': crop,
+        'problems': [
+            _problem('failing', 'fail', ['<script>alert(1)</script>'], ['c']),
+            _problem('warning', 'warn', ['Maybe'], ['b']),
+            _problem('skipping', 'skipped', ['No face'], ['d']),
+            _problem('crashing', 'error', ['Boom'], []),
+        ],
         'checks': [
             _check('passing', 'pass'),
             _check('warning', 'warn', ['Maybe'], ratio=0.123456, worn=True),
@@ -76,18 +89,46 @@ def test_every_rule_shows_its_own_status():
     assert dict(cells) == shown and len(cells) == len(shown)
 
 
-def test_failing_and_warning_rules_are_listed_first_with_links():
+def test_problems_are_listed_first_by_cause_with_links_to_their_rules():
     to_fix = _section(_render(), 'to-fix')
+    assert re.findall(r'data-problem="(\w+)"', to_fix) == ['failing', 'warning']
     assert re.findall(r'href="#rule-(\w+)"', to_fix) == ['c', 'b']
+    assert 'Maybe</span>' in to_fix and 'Because of this' not in to_fix
 
 
-def test_skipped_rules_are_called_out_and_loose_checks_listed():
+def test_a_problem_that_stopped_other_checks_lists_the_rules_they_left_unjudged():
+    payload = _payload()
+    payload['problems'][0]['not_judged'] = ['d']
+    payload['problems'][0]['reasons'] = ['<script>alert(1)</script> And the rest.']
+    page = render_report(payload, Image.new('RGB', (2000, 1000)), 'photo.jpg')
+    row = _section(page, 'to-fix').split('<tr data-problem="failing">')[1].split('</tr>')[0]
+    assert 'Because of this, not judged</span><a href="#rule-d">Rule d</a>' in row
+    assert '<span class="detail">And the rest.</span>' in row
+
+
+def test_a_warning_whose_rules_other_checks_decide_says_so():
+    payload = _payload()
+    payload['problems'][1]['rules'] = []
+    to_fix = _section(render_report(payload, Image.new('RGB', (2000, 1000)), 'photo.jpg'), 'to-fix')
+    assert re.findall(r'href="#rule-(\w+)"', to_fix) == ['c']
+    assert 'none: its rules are decided by other checks' in to_fix
+
+
+def test_checks_that_could_not_judge_are_called_out_and_loose_checks_listed():
     page = _render()
     not_judged = _section(page, 'not-judged')
-    assert 'Rule d</a>' in not_judged and 'No face' in not_judged
-    # The crashing check covers no rule, so it gets its own section
+    assert re.findall(r'data-problem="(\w+)"', not_judged) == ['skipping', 'crashing']
+    assert 'Rule d</a>' in not_judged and 'No face' in not_judged and 'Boom' in not_judged
+    # The crashing check covers no rule, so it gets its own section too
     assert 'crashing' in _section(page, 'other-checks')
     assert 'A group without rules' not in page
+
+
+def test_a_photo_without_problems_has_neither_box():
+    payload = _payload()
+    payload['problems'] = []
+    page = render_report(payload, Image.new('RGB', (2000, 1000)), 'photo.jpg')
+    assert '<section id="to-fix">' not in page and '<section id="not-judged">' not in page
 
 
 def test_a_rule_title_used_in_two_groups_names_its_group_in_the_lists():
@@ -95,6 +136,7 @@ def test_a_rule_title_used_in_two_groups_names_its_group_in_the_lists():
     payload['groups'].append({'id': 'light', 'title': 'Lighting'})
     payload['rules'].append(dict(payload['rules'][3], id='d2', group='light', title='Rule d'))
     payload['skipped_rules'].append('d2')
+    payload['problems'][2]['rules'].append('d2')
     page = render_report(payload, Image.new('RGB', (2000, 1000)), 'photo.jpg')
     not_judged = _section(page, 'not-judged')
     assert 'Rule d (Eyes and glasses)</a>' in not_judged and 'Rule d (Lighting)</a>' in not_judged

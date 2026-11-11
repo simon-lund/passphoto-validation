@@ -16,6 +16,7 @@ from passphoto_validation.core import PassportPhotoValidator
 from passphoto_validation.core.config import ValidatorConfig
 from passphoto_validation.core.models import Crop
 from passphoto_validation.core.utils import convert_to_bgr
+from passphoto_validation.core.validator import CHECK_DEPENDENCIES
 
 IMAGES = pathlib.Path(__file__).parent / 'test-images'
 needs_ofiq = pytest.mark.skipif(not os.environ.get('OFIQ_CONFIG_DIR'), reason='OFIQ_CONFIG_DIR is not set')
@@ -349,6 +350,74 @@ def test_original_passes_the_ofiq_checks(validator, photo):
     for name in ('ofiq_head_yaw', 'ofiq_head_pitch', 'ofiq_head_roll', 'ofiq_expression', 'ofiq_eyes_open',
                  'ofiq_overexposure', 'ofiq_illumination', 'glasses_tint', 'glasses_glare'):
         assert statuses[name] == 'pass', name
+
+
+def _sunglasses(image_bgr, tint=0.85):
+    # Dark lenses in a dark frame over each eye, as scripts/build_eval_set.py draws its sunglasses variant
+    points = _mesh_points(image_bgr)
+    out = image_bgr.copy()
+    eye_distance = float(np.linalg.norm(points[33] - points[263]))
+    lens = np.zeros(image_bgr.shape[:2], np.uint8)
+    centres = []
+    for outer, inner in ((33, 133), (263, 362)):
+        centre = tuple(int(v) for v in (points[outer] + points[inner]) / 2)
+        centres.append(centre)
+        cv2.ellipse(lens, centre, (int(eye_distance * 0.3), int(eye_distance * 0.22)), 0, 0, 360, 255, -1)
+    alpha = (lens[..., None] / 255.0) * tint
+    out = (out * (1 - alpha) + np.array((25, 20, 20)) * alpha).astype(np.uint8)
+    frame = max(2, int(eye_distance * 0.035))
+    for centre in centres:
+        cv2.ellipse(out, centre, (int(eye_distance * 0.3), int(eye_distance * 0.22)), 0, 0, 360, (15, 15, 15), frame)
+    (ax, ay), (bx, by) = centres
+    cv2.line(out, (int(ax + eye_distance * 0.3), ay), (int(bx - eye_distance * 0.3), by), (15, 15, 15), frame)
+    return out
+
+
+@needs_ofiq
+def test_covered_eyes_stop_the_checks_that_need_them(validator, photo):
+    report = validator(_sunglasses(photo), crop=False)
+    checks = {check.name: check for check in report.checks}
+    root = checks['ofiq_eyes_visible']
+    assert root.status == 'fail'
+    reason = f'Not judged: {root.reasons[0]}'
+    for name in CHECK_DEPENDENCIES['ofiq_eyes_visible']:
+        assert checks[name].status == 'skipped' and checks[name].reasons == [reason], name
+    rules = {rule.id: rule for rule in report.rules}
+    for rule_id in ('eyes_open', 'no_red_eyes', 'eyes_facing_camera', 'glasses_no_reflections'):
+        assert rules[rule_id].status == 'skipped' and rules[rule_id].reasons == [reason], rule_id
+    # Rules another check still judges keep that verdict
+    assert rules['natural_colour'].status == 'pass' and rules['no_reflections'].status == 'pass'
+    assert not report.is_valid
+
+    # One problem for the covered eyes: the rules it breaks and the ones it left unjudged, none for the stopped checks
+    problem = next(problem for problem in report.problems if problem.check == 'ofiq_eyes_visible')
+    assert problem.rules == ['eyes_not_covered', 'glasses_not_tinted', 'glasses_frame_clear']
+    assert problem.not_judged == ['no_red_eyes', 'eyes_open', 'eyes_facing_camera', 'glasses_no_reflections']
+    assert not {problem.check for problem in report.problems} & set(CHECK_DEPENDENCIES['ofiq_eyes_visible'])
+
+
+@needs_ofiq
+def test_a_root_turned_off_in_the_thresholds_file_stops_nothing(photo, tmp_path):
+    file = tmp_path / 'thresholds.toml'
+    file.write_text('[ofiq_eyes_visible]\nenabled = false\n')
+    validator = PassportPhotoValidator(ValidatorConfig(thresholds_file=str(file)))
+    checks = {check.name: check for check in validator(_sunglasses(photo), crop=False).checks}
+    assert 'ofiq_eyes_visible' not in checks
+    # Without the root, the eye checks run as before, on the lenses
+    for name in CHECK_DEPENDENCIES['ofiq_eyes_visible']:
+        assert checks[name].status != 'skipped' or 'Not judged' not in checks[name].reasons[0], name
+    assert checks['glasses_tint'].status == 'fail'
+
+
+@needs_ofiq
+def test_a_root_measured_early_keeps_the_report_in_check_order(validator, photo):
+    # ofiq_eyes_visible runs before colour_cast, its first dependent; the issues and measurements still
+    # come in check order, as before
+    report = validator(photo, crop=False)
+    position = {name: i for i, name in enumerate(validator.check_names())}
+    positions = [position[issue.check] for issue in report.issues]
+    assert positions == sorted(positions)
+    assert list(report.measurements) == list(dict.fromkeys(key for check in report.checks for key in check.measurements))
 
 
 @needs_ofiq

@@ -96,19 +96,24 @@
   .stamp .label { display: block; margin-bottom: 8px; }
   .stamp .sub { display: block; margin-top: 8px; font-size: 11.5px; font-weight: 400; letter-spacing: 0; text-transform: none; }
 
+  /* One box per problem (a check that did not pass); the rules it decided are chips, each a button */
   .rules { display: flex; flex-direction: column; gap: 6px; }
-  .rule { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; align-items: start; text-align: left;
-          padding: 6px 8px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; }
-  .rule:hover { border-color: var(--ink); }
-  .rule:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
-  .rule .title { font-weight: 700; }
-  .rule .reasons { grid-column: 2 / 4; }
-  .rule .mark { color: var(--muted); white-space: nowrap; }
-  .rule .mark .when-on, .rule[aria-pressed="true"] .mark .when-off { display: none; }
-  .rule[aria-pressed="true"] { border: 2px solid var(--ink); }
-  .rule[aria-pressed="true"] .title, .rule[aria-pressed="true"] .reasons { text-decoration: line-through; }
-  .rule[aria-pressed="true"] .mark { color: var(--ink); font-weight: 700; }
-  .rule[aria-pressed="true"] .mark .when-on { display: inline; }
+  .problem { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; align-items: start;
+             padding: 6px 8px; border: 1px solid var(--line); background: var(--panel); }
+  .problem .title { font-weight: 700; }
+  .problem .check, .problem .rest, .problem .line { grid-column: 2; }
+  .problem .line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 3px; }
+  .problem .line .label { color: var(--muted); margin-right: 4px; }
+  .chip { display: inline-flex; align-items: baseline; gap: 6px; padding: 2px 6px; border: 1px solid var(--line);
+          background: var(--paper); cursor: pointer; text-align: left; font-size: 12px; }
+  .chip:hover { border-color: var(--ink); }
+  .chip:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+  .chip .mark { color: var(--muted); font-size: 10.5px; white-space: nowrap; }
+  .chip .mark .when-on, .chip[aria-pressed="true"] .mark .when-off { display: none; }
+  .chip[aria-pressed="true"] { border: 2px solid var(--ink); padding: 1px 5px; }
+  .chip[aria-pressed="true"] .chip-title { text-decoration: line-through; }
+  .chip[aria-pressed="true"] .mark { color: var(--ink); font-weight: 700; }
+  .chip[aria-pressed="true"] .mark .when-on { display: inline; }
   .rules .none { padding: 4px 0; }
 
   details summary { cursor: pointer; }
@@ -343,7 +348,7 @@
     $('expect').innerHTML = parts.length ? parts.join(' ') : '<span class="muted">No label for this photo.</span>';
   }
 
-  const ORDER = { fail: 0, skipped: 1, warn: 2, pass: 3, not_checked: 4 };
+  const LINE_LABEL = { fail: 'Breaks', warn: 'Warns on', skipped: 'Not judged', error: 'Not judged' };
   function verdict(item, entry) {
     const v = item.verdict;
     const stamp = $('stamp');
@@ -355,38 +360,42 @@
     else if (crop && crop.status === 'not_possible') sub = `No crop possible: ${crop.reason}`;
     $('stamp-sub').textContent = sub;
 
-    const rules = v.rules.filter((r) => r.status !== 'pass' && r.status !== 'not_checked').sort((a, b) => ORDER[a.status] - ORDER[b.status]);
+    // One box per problem, the check's headline first (the rule's title names the good state and reads
+    // backwards under a fail), then the rules it decided as chips. A click on a chip marks that rule's
+    // status as wrong; a rule under two problems toggles in both
+    // The Fotomustertafel repeats some titles in two groups; those chips carry the rule id too
+    const titles = Object.fromEntries(v.rules.map((r) => [r.id, r.title]));
+    const titleCount = v.rules.reduce((n, r) => ({ ...n, [r.title]: (n[r.title] || 0) + 1 }), {});
+    const chipTitle = (id) => (titles[id] ? (titleCount[titles[id]] > 1 ? `${titles[id]} (${id})` : titles[id]) : id);
+    const chips = (ruleIds) => ruleIds.map((id) =>
+      `<button type="button" class="chip" data-rule="${esc(id)}" aria-pressed="false" title="${esc(id)}: click when this rule's status is wrong">` +
+      `<span class="chip-title">${esc(chipTitle(id))}</span>` +
+      `<span class="mark"><span class="when-off">mark wrong</span><span class="when-on">✗ wrong</span></span></button>`).join('');
     const box = $('rules'); box.innerHTML = '';
-    for (const rule of rules) {
-      const b = document.createElement('button');
-      b.type = 'button'; b.className = 'rule'; b.dataset.rule = rule.id; b.setAttribute('aria-pressed', 'false');
-      b.title = 'Click when this rule\'s status is wrong';
-      // The headline is the problem the check reported (its first sentence); the rule it breaks goes below,
-      // since the rule's title names the good state and reads backwards under a fail
-      const reasons = rule.reasons.map((r) => r.trim()).filter(Boolean);
-      let headline, rest;
-      if (reasons.length) {
-        const m = reasons[0].match(/^(.*?[.!?])(\s+|$)([\s\S]*)$/);
-        headline = m ? m[1] : reasons[0];
-        rest = [m ? m[3] : '', ...reasons.slice(1)].filter(Boolean).join(' ');
-      } else {
-        headline = rule.status === 'skipped' ? 'Could not be judged' : rule.title;
-        rest = '';
-      }
-      b.innerHTML = `<span class="st" data-status="${rule.status}">${rule.status}</span><span class="title">${esc(headline)}</span>` +
-        `<span class="mark small"><span class="when-off">mark wrong</span><span class="when-on">✗ wrong</span></span>` +
-        `<span class="reasons small muted">Rule: ${esc(rule.title)}${rest ? ' · ' + esc(rest) : ''}</span>`;
-      b.addEventListener('click', () => {
-        const on = b.getAttribute('aria-pressed') !== 'true';
-        b.setAttribute('aria-pressed', String(on));
-        if (on) state.wrong.add(rule.id); else state.wrong.delete(rule.id);
-        status(state.wrong.size ? `${state.wrong.size} rule(s) marked wrong.` : '');
-      });
-      box.appendChild(b);
+    for (const problem of v.problems) {
+      const row = document.createElement('div');
+      row.className = 'problem'; row.dataset.check = problem.check;
+      const text = problem.reasons.map((r) => r.trim()).filter(Boolean).join(' ');
+      const rest = text.startsWith(problem.headline) ? text.slice(problem.headline.length).trim() : text;
+      let lines = problem.rules.length
+        ? `<span class="line small"><span class="label">${LINE_LABEL[problem.status]}</span>${chips(problem.rules)}</span>`
+        : '<span class="line small muted">No rule of its own: its rules are decided by other checks.</span>';
+      if (problem.not_judged.length) lines += `<span class="line small"><span class="label">Because of this, not judged</span>${chips(problem.not_judged)}</span>`;
+      row.innerHTML = `<span class="st" data-status="${problem.status}">${problem.status}</span>` +
+        `<span class="title">${esc(problem.headline)}</span><span class="check small muted">${esc(problem.check)}</span>` +
+        (rest ? `<span class="rest small muted">${esc(rest)}</span>` : '') + lines;
+      box.appendChild(row);
     }
+    box.querySelectorAll('.chip').forEach((chip) => chip.addEventListener('click', () => {
+      const id = chip.dataset.rule;
+      const on = chip.getAttribute('aria-pressed') !== 'true';
+      if (on) state.wrong.add(id); else state.wrong.delete(id);
+      box.querySelectorAll(`.chip[data-rule="${CSS.escape(id)}"]`).forEach((c) => c.setAttribute('aria-pressed', String(on)));
+      status(state.wrong.size ? `${state.wrong.size} rule(s) marked wrong.` : '');
+    }));
     const passes = v.rules.filter((r) => r.status === 'pass').length;
     const none = document.createElement('div'); none.className = 'none small muted';
-    none.textContent = rules.length ? `${passes} rules pass.` : `Every rule passes (${passes}).`;
+    none.textContent = v.problems.length ? `${passes} rules pass.` : `Every rule passes (${passes}).`;
     box.appendChild(none);
 
     const table = $('checks-table');
