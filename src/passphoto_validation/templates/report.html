@@ -147,10 +147,15 @@
           font-size: 11px; font-weight: 700; text-decoration: none; }
   .cell:hover { outline: 2px solid var(--ink); outline-offset: 1px; }
 
-  /* Rules that need attention */
+  /* What to fix and what could not be judged, by cause; the crop's rows */
   .data { table-layout: fixed; }
   .data .c-st { width: 84px; }
   .data .c-rule { width: 38%; }
+  .data .c-problem { width: 44%; }
+  .data .headline { font-weight: 700; }
+  .data .detail { display: block; color: var(--muted); }
+  .data .also { display: block; margin-top: 4px; }
+  .data .also .label { color: var(--muted); margin-right: 6px; }
   .data th { padding: 5px 10px; border-bottom: 1px solid var(--ink); color: var(--muted); }
   .data td { padding: 6px 10px; border-bottom: 1px solid var(--line); }
   .data tr:last-child td { border-bottom: 0; }
@@ -243,16 +248,23 @@
   </tbody>
 </table>
 {%- endmacro %}
-{% macro attention(rules) -%}
+{% macro rule_links(rule_ids) -%}
+{% for rule_id in rule_ids %}<a href="#rule-{{ rule_id }}">{{ flat_title[rule_id] }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
+{%- endmacro %}
+{# One row per cause: the check's headline, then the rules it decided (each linking to its row below) #}
+{% macro problems_table(problems) -%}
 <table class="data">
-  <colgroup><col class="c-st"><col class="c-rule"><col></colgroup>
-  <thead><tr><th>Status</th><th>Rule</th><th>Why</th></tr></thead>
+  <colgroup><col class="c-st"><col class="c-problem"><col></colgroup>
+  <thead><tr><th>Status</th><th>Problem</th><th>Rules</th></tr></thead>
   <tbody>
-  {% for rule in rules %}
-  <tr>
-    <td>{{ st(rule.status) }}</td>
-    <td><a href="#rule-{{ rule.id }}">{{ flat_title[rule.id] }}</a><span class="group">{{ group_titles[rule.group] }}</span></td>
-    <td>{{ rule.reasons[0] if rule.reasons else '' }}</td>
+  {% for problem in problems %}
+  <tr data-problem="{{ problem.check }}">
+    <td>{{ st(problem.status) }}</td>
+    <td><span class="headline">{{ problem.headline }}</span>{% if detail(problem) %}<span class="detail">{{ detail(problem) }}</span>{% endif %}<span class="group">{{ breakable(problem.check) }}</span></td>
+    <td>
+      {% if problem.rules %}{{ rule_links(problem.rules) }}{% else %}<span class="muted">none: its rules are decided by other checks</span>{% endif %}
+      {% if problem.not_judged %}<span class="also"><span class="label">Because of this, not judged</span>{{ rule_links(problem.not_judged) }}</span>{% endif %}
+    </td>
   </tr>
   {% endfor %}
   </tbody>
@@ -324,7 +336,7 @@
     {% if problems %}
     <section id="to-fix">
       <h2>To fix <span class="n">{{ problems | length }}</span></h2>
-      {{ attention(problems) }}
+      {{ problems_table(problems) }}
     </section>
     {% endif %}
 
@@ -357,11 +369,11 @@
     </section>
     {% endif %}
 
-    {% if skipped_rules %}
+    {% if not_judged %}
     <section id="not-judged">
-      <h2>Not judged <span class="n">{{ skipped_rules | length }}</span></h2>
-      <p class="lede">No check could run on these rules, so the photo can't be valid.</p>
-      {{ attention(skipped_rules) }}
+      <h2>Not judged <span class="n">{{ not_judged | length }}</span></h2>
+      <p class="lede">These checks could not run, so their rules are not judged and the photo can't be valid.</p>
+      {{ problems_table(not_judged) }}
     </section>
     {% endif %}
 
