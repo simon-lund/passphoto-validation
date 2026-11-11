@@ -1,0 +1,33 @@
+[project]
+name = "passphoto-decisions"
+version = "0.1.0"
+description = "The German ID photo rules judged by OpenAI's Decisions API: the baseline for passphoto-validation"
+readme = "README.md"
+license = { text = "EUPL-1.2" }
+authors = [
+    { name = "Simon Lund", email = "41208671+simon-lund@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "openai>=3.46",
+    "pillow>=13.0.0",
+    "python-dotenv>=1.2.4",
+    "rich>=15.0.0",
+    "typer>=0.28.0",
+]
+
+[project.scripts]
+passphoto-decisions = "passphoto_decisions.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pandas>=3.1.1",
+    "pytest>=9.2.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
