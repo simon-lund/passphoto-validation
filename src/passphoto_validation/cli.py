@@ -132,39 +132,27 @@ def _display_report(report, verbose: bool):
         box=box.ROUNDED
     ))
 
-    # Issues table
-    if report.issues:
-        console.print(f"\n[bold]Found {len(report.issues)} issue(s):[/bold]\n")
-
+    # The problems: one row per check that did not pass, with the rules it decided (report.problems)
+    titles = {rule.id: rule.title for rule in report.rules}
+    if report.problems:
+        console.print(f"\n[bold]{len(report.problems)} problem(s):[/bold]\n")
         table = Table(show_header=True, header_style="bold", box=box.SIMPLE)
-        table.add_column("Type", style="cyan", width=8)
-        table.add_column("Severity", justify="center", width=8)
-        table.add_column("Issue", style="white")
-
-        # Sort by severity (highest first)
-        sorted_issues = sorted(report.issues, key=lambda x: x.severity, reverse=True)
-
-        for issue in sorted_issues:
-            if issue.category == 'error':
-                type_str = "[red]ERROR[/red]"
-            elif issue.category == 'warning':
-                type_str = "[yellow]WARNING[/yellow]"
-            else:
-                type_str = "[blue]INFO[/blue]"
-
-            severity_bar = "█" * issue.severity
-            table.add_row(type_str, severity_bar, issue.message)
-
+        table.add_column("Status", width=10)
+        table.add_column("Problem", style="white")
+        table.add_column("Rules", style="cyan")
+        labels = {'fail': '[red]FAIL[/red]', 'warn': '[yellow]WARN[/yellow]', 'skipped': '[yellow]NOT JUDGED[/yellow]',
+                  'error': '[magenta]CRASHED[/magenta]'}
+        for problem in report.problems:
+            rest = ' '.join(problem.reasons)
+            rest = rest[len(problem.headline):].strip() if rest.startswith(problem.headline) else rest
+            text = f"[bold]{problem.headline}[/bold]" + (f"\n{rest}" if rest else '')
+            rules = '\n'.join(titles.get(rule, rule) for rule in problem.rules)
+            if problem.not_judged:
+                rules += '\n[dim]not judged because of this: ' + ', '.join(titles.get(rule, rule) for rule in problem.not_judged) + '[/dim]'
+            table.add_row(labels.get(problem.status, problem.status.upper()), text, rules)
         console.print(table)
     else:
-        console.print("\n[bold green]✓ No issues found![/bold green]")
-
-    # Rules that could not be judged keep a photo from being valid
-    skipped = [rule for rule in report.rules if rule.id in report.skipped_rules]
-    if skipped:
-        console.print(f"\n[bold yellow]{len(skipped)} rule(s) could not be checked:[/bold yellow]")
-        for rule in skipped:
-            console.print(f"  {rule.title}: {rule.reasons[0] if rule.reasons else 'no check ran'}")
+        console.print("\n[bold green]✓ Every rule passes.[/bold green]")
 
     # Suggested crop
     if report.suggested_crop:
@@ -183,7 +171,12 @@ def _display_report(report, verbose: bool):
     elif crop and crop.status == 'not_possible':
         console.print(f"\n[bold]Crop to 35x45:[/bold] not possible. {crop.reason}")
 
-    # Measurements (verbose mode)
+    # Every check, then the measurements (verbose mode)
+    if verbose:
+        console.print("\n[bold]Checks:[/bold]")
+        for check in report.checks:
+            reasons = f" {' '.join(check.reasons)}" if check.reasons else ''
+            console.print(f"  {check.status:8} {check.name}{reasons}")
     if verbose and report.measurements:
         console.print("\n[bold]Measurements:[/bold]")
         for key, value in report.measurements.items():

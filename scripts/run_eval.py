@@ -6,7 +6,7 @@ With several workers, give OFIQ a config that limits its threads (OFIQ_CONFIG_FI
 ofiq_config.jaxn with "ort_intra_threads": 3), or the workers starve each other.
 
 Writes results.jsonl (or --out) next to the manifest: one line per photo with its manifest row, every check
-(status, reasons, numeric measurements) and every rule status.
+(status, reasons, numeric measurements), every rule status and the problems (the causes, with the rules each decided).
 """
 import argparse
 import csv
@@ -42,6 +42,11 @@ def _run(job):
             for c in report.checks
         },
         'rules': {r.id: r.status for r in report.rules},
+        # The causes: one entry per check that did not pass, with the rules it decided (report.problems)
+        'problems': [
+            {'check': p.check, 'status': p.status, 'headline': p.headline, 'rules': p.rules, 'not_judged': p.not_judged}
+            for p in report.problems
+        ],
     }
 
 

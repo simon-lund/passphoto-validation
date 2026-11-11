@@ -33,7 +33,8 @@ TARGETS = {
     'small_head': ['face_size'],
     'off_center': ['face_centered'],
     'red_eye': ['red_eyes'],
-    'sunglasses': ['glasses_tint', 'ofiq_eyes_visible'],
+    # glasses_tint is stopped once ofiq_eyes_visible fails (CHECK_DEPENDENCIES), so sunglasses count through the root
+    'sunglasses': ['ofiq_eyes_visible'],
     'glasses_glare': ['glasses_glare'],
     'bg_pattern': ['ofiq_background', 'background_consistency', 'background_pattern'],
     'bg_object': ['background_uniformity', 'ofiq_background'],
