@@ -189,3 +189,85 @@ def test_enabled_false_turns_a_check_off_and_its_rule_is_not_checked(tmp_path):
     assert 'skin_colour_patches' not in {check.name for check in report.checks}
     rule = {rule.id: rule for rule in report.rules}['no_retouching']
     assert rule.status == 'not_checked' and 'turned off' in rule.reasons[0]
+
+
+def test_a_list_must_have_the_length_and_the_numbers_the_check_unpacks(tmp_path):
+    # A list of the wrong length passed the type check and crashed the check on every photo
+    cases = (
+        ('[face_centered]\nvertical_range = [0.4]\n', 'vertical_range must be a list of 2 numbers'),
+        ('[face_centered]\nvertical_range = [0.4, 0.6, 0.8]\n', 'vertical_range must be a list of 2 numbers'),
+        ('[face_centered]\nvertical_range = ["low", "high"]\n', 'vertical_range must be a list of 2 numbers'),
+        ('[face_centered]\nvertical_range = [true, false]\n', 'vertical_range must be a list of 2 numbers'),
+        ('[face_centered]\nvertical_range = 0.5\n', 'vertical_range must be a list of 2 numbers'),
+        ('[resolution]\nmin_res = [413]\n', 'min_res must be a list of 2 numbers'),
+    )
+    for text, message in cases:
+        file = tmp_path / 'thresholds.toml'
+        file.write_text(text)
+        with pytest.raises(ThresholdsFileError, match=re.escape(message)):
+            _checks(str(file))
+
+
+def test_a_renamed_parameter_still_answers_to_its_old_name(tmp_path):
+    # Thresholds files exported before the warn/fail naming use these names
+    file = tmp_path / 'thresholds.toml'
+    file.write_text('[background_brightness]\nmin_brightness = 100\n\n[background_uniformity]\nvariance_threshold = 150\n\n'
+                    '[background_consistency]\ncov_threshold = 0.4\n')
+    checks = _checks(str(file))
+    kwargs = {name: kw for name, _, kw in checks}
+    assert kwargs['background_brightness'] == dict(warn_below=100, fail_below=80)
+    assert kwargs['background_uniformity'] == dict(fail_above=150)
+    assert kwargs['background_consistency'] == dict(fail_above=0.4)
+    # The export writes the current names only
+    data = tomllib.loads(to_toml(checks))
+    assert data['background_brightness']['warn_below'] == 100 and 'min_brightness' not in data['background_brightness']
+    assert 'variance_threshold' not in data['background_uniformity'] and 'cov_threshold' not in data['background_consistency']
+    # Old and new name together is a contradiction, whichever comes first
+    for text in ('[background_brightness]\nmin_brightness = 100\nwarn_below = 110\n',
+                 '[background_brightness]\nwarn_below = 110\nmin_brightness = 100\n'):
+        file.write_text(text)
+        with pytest.raises(ThresholdsFileError, match='sets both min_brightness and warn_below'):
+            _checks(str(file))
+
+
+def test_false_turns_off_the_levels_with_older_names_too(tmp_path):
+    file = tmp_path / 'thresholds.toml'
+    file.write_text('[resolution]\nmin_res = false\nrecommended_res = false\n\n[photo_format]\ntolerance = false\n\n'
+                    '[face_centered]\nvertical_range = false\n')
+    checks = _checks(str(file))
+    kwargs = {name: kw for name, _, kw in checks}
+    assert kwargs['resolution'] == dict(min_res=(0, 0), recommended_res=(0, 0))
+    assert kwargs['photo_format'] == dict(tolerance=math.inf)
+    assert kwargs['face_centered'] == dict(vertical_range=(-math.inf, math.inf))
+    # The export says false for them, and that file loads back to the same values
+    text = to_toml(checks)
+    data = tomllib.loads(text)
+    assert data['resolution']['min_res'] is False and data['resolution']['recommended_res'] is False
+    assert data['photo_format']['tolerance'] is False and data['photo_format']['warn_tolerance'] is False
+    assert data['face_centered']['vertical_range'] is False and data['face_centered']['fail_vertical_range'] is False
+    file.write_text(text)
+    assert [(name, parameters(check, kw)) for name, check, kw in _checks(str(file))] == \
+        [(name, parameters(check, kw)) for name, check, kw in checks]
+
+
+def test_a_range_open_at_one_end_round_trips(tmp_path):
+    file = tmp_path / 'thresholds.toml'
+    file.write_text('[face_centered]\nvertical_range = [0.45, inf]\n')
+    checks = _checks(str(file))
+    assert {name: kw for name, _, kw in checks}['face_centered'] == dict(vertical_range=(0.45, math.inf))
+    text = to_toml(checks)
+    assert 'vertical_range = [0.45, inf]' in text
+    file.write_text(text)
+    assert {name: kw for name, _, kw in _checks(str(file))}['face_centered']['vertical_range'] == (0.45, math.inf)
+
+
+def test_the_parameters_the_api_lists_are_json(tmp_path):
+    import json
+    file = tmp_path / 'thresholds.toml'
+    file.write_text('[face_centered]\nvertical_range = [0.45, inf]\n\n[resolution]\nrecommended_res = false\n')
+    validator = PassportPhotoValidator(ValidatorConfig(ofiq_config_dir=None, thresholds_file=str(file)))
+    listed = json.loads(json.dumps(validator.parameters(), allow_nan=False))  # JSON has no infinity
+    assert listed['face_centered']['vertical_range'] == [0.45, None]
+    assert listed['face_centered']['fail_vertical_range'] is False
+    assert listed['resolution'] == dict(enabled=True, min_res=[413, 531], recommended_res=False)
+    assert listed['photo_format']['warn_tolerance'] is False and listed['red_eyes']['warn_above'] is False

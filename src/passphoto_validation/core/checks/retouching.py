@@ -5,7 +5,8 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
-from ..models import CheckSkipped, ValidationIssue, ValidationContext
+from ..levels import judge
+from ..models import CheckSkipped, ValidationContext
 from ..utils import mesh_points
 
 # MediaPipe face mesh indices: the middle of each cheek, the forehead (top, and just above the brows),
@@ -85,19 +86,15 @@ def check_skin_smoothing(context: ValidationContext, warn_below: float, warn_gra
     context.measurements['skin_texture_ratio'] = ratio
     if gradient_ratio is not None:  # a flat face has no gradient to compare with
         context.measurements['skin_gradient_ratio'] = gradient_ratio
-    if ratio < fail_below or ratio < warn_below:
-        context.issues.append(ValidationIssue(
-            category='error' if ratio < fail_below else 'warning', severity=4,
-            message=f'The skin looks smoothed, as by a beauty filter (texture ratio {ratio:.2f}). The photo must not be retouched.'))
+    finding = (f'The skin looks smoothed, as by a beauty filter (texture ratio {ratio:.2f}). The photo must not be retouched.', 4)
+    if judge(context, ratio, warn_below=warn_below, fail_below=fail_below, fail=finding, warn=finding) != 'pass':
         return
     blurred = any(issue.check == 'face_sharpness' and issue.category == 'error' for issue in context.issues)
-    warn_gradient = gradient_ratio is not None and warn_gradient_ratio_below is not None and gradient_ratio < warn_gradient_ratio_below
-    fail_gradient = gradient_ratio is not None and gradient_ratio < fail_gradient_ratio_below
-    if (warn_gradient or fail_gradient) and not blurred:
-        context.issues.append(ValidationIssue(
-            category='error' if fail_gradient else 'warning', severity=4,
-            message=f'The skin has lost its fine texture while the edges of the face stayed sharp, as a filter over the '
-                    f'whole face leaves it (gradient ratio {gradient_ratio:.3f}). The photo must not be retouched.'))
+    if gradient_ratio is not None and not blurred:
+        finding = (f'The skin has lost its fine texture while the edges of the face stayed sharp, as a filter over the '
+                   f'whole face leaves it (gradient ratio {gradient_ratio:.3f}). The photo must not be retouched.', 4)
+        judge(context, gradient_ratio, warn_below=warn_gradient_ratio_below, fail_below=fail_gradient_ratio_below,
+              fail=finding, warn=finding)
 
 
 def _hull(shape, points: np.ndarray, connections, grow: int = 0) -> np.ndarray:
@@ -189,8 +186,6 @@ def check_skin_colour_patches(context: ValidationContext, warn_share_above: floa
     share = float(sum(patches) / oval_area)
     context.measurements['skin_foreign_share'] = share
     context.measurements['skin_foreign_patches'] = len(patches)
-    if share > warn_share_above:
-        context.issues.append(ValidationIssue(
-            category='error' if share > fail_share_above else 'warning', severity=7 if share > fail_share_above else 4,
-            message=f'Patches of a colour that is not skin cover {share:.0%} of the face, as the stickers of a face '
-                    f'filter or face paint do. The photo must not be retouched or filtered.'))
+    message = (f'Patches of a colour that is not skin cover {share:.0%} of the face, as the stickers of a face '
+               f'filter or face paint do. The photo must not be retouched or filtered.')
+    judge(context, share, warn_above=warn_share_above, fail_above=fail_share_above, fail=(message, 7), warn=(message, 4))

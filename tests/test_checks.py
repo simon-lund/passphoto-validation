@@ -188,7 +188,7 @@ def test_blurred_photo_fails_sharpness_without_a_retouching_warning(validator, p
     assert statuses['skin_smoothing'] == 'pass'
 
 
-def test_coloured_stickers_on_the_face_warn_skin_colour_patches(validator, photo):
+def _stickers(photo):
     # A face filter's stickers: a pink nose and a coloured butterfly on each cheek
     points = _mesh_points(photo)
     face_width = np.linalg.norm(points[234] - points[454])
@@ -200,7 +200,28 @@ def test_coloured_stickers_on_the_face_warn_skin_colour_patches(validator, photo
         size = int(face_width * 0.07)
         for side in (-1, 1):
             cv2.ellipse(stickered, (cx + side * size // 2, cy), (size // 2, int(size * 0.7)), side * 25, 0, 360, colour, -1, cv2.LINE_AA)
-    assert _statuses(validator, stickered)['skin_colour_patches'] == 'fail'
+    return stickered
+
+
+def test_coloured_stickers_on_the_face_warn_skin_colour_patches(validator, photo):
+    assert _statuses(validator, _stickers(photo))['skin_colour_patches'] == 'fail'
+
+
+def test_stickers_still_fail_with_the_warn_level_turned_off(photo, tmp_path):
+    # Turning the warning off must not take the fail with it
+    file = tmp_path / 'thresholds.toml'
+    file.write_text('[skin_colour_patches]\nwarn_share_above = false\n')
+    validator = PassportPhotoValidator(ValidatorConfig(ofiq_config_dir=None, thresholds_file=str(file)))
+    assert _statuses(validator, _stickers(photo))['skin_colour_patches'] == 'fail'
+
+
+def test_the_head_size_message_names_only_levels_that_are_on(photo, tmp_path):
+    file = tmp_path / 'thresholds.toml'
+    file.write_text('[face_size]\nwarn_below = false\nwarn_above = false\nfail_below = 0.95\nfail_above = false\n')
+    validator = PassportPhotoValidator(ValidatorConfig(ofiq_config_dir=None, thresholds_file=str(file)))
+    check = {check.name: check for check in validator(photo, crop=False).checks}['face_size']
+    assert check.status == 'fail'
+    assert check.reasons[0].startswith('Head is too small') and check.reasons[0].endswith('Should be at least 95%.')
 
 
 def _red_pupils(image_bgr):

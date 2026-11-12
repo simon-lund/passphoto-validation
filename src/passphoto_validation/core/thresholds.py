@@ -7,21 +7,23 @@ pins the table, so update its snapshot on purpose) and re-run `notebooks/evaluat
 
 The keyword names are those of the check functions. `warn_above` / `fail_above` mean higher is worse,
 `warn_below` / `fail_below` lower is worse, `fail_at` is a count. A check not listed here runs with the
-defaults of its function signature (`photo_format`, `face_size`, `face_centered`, `contrast`,
-`background_uniformity`, `background_consistency`, `glare`); `resolution` takes its minimums from
-`ValidatorConfig`, where they can be set per deployment.
+defaults of its function signature (`photo_format`, `face_size`, `face_centered`, `background_uniformity`,
+`background_consistency`, `glare`); `resolution` takes its minimums from `ValidatorConfig`, where they can
+be set per deployment.
 
 A deployment can override any parameter of any check without editing this file: a TOML thresholds file
 (`ValidatorConfig.thresholds_file`, `passport-validator --thresholds`), one table per check, is read by
 `load_overrides` and merged by `apply_overrides`, which refuses unknown checks, unknown parameters and
-wrong types. `to_toml` writes every parameter with its current value, to start such a file from. The file
-is applied last, after this table and `ValidatorConfig` (so its `[resolution]` wins over `MIN_RES_*`).
+wrong types (a list of the wrong length too). `to_toml` writes every parameter with its current value, to
+start such a file from. The file is applied last, after this table and `ValidatorConfig` (so its
+`[resolution]` wins over `MIN_RES_*`).
 
 The convention of that file: every check has a warn level and a fail level (`warn_…`, `fail_…`); `false`
-turns a level off (in the code an off level is +inf or -inf, which no measurement reaches, so the checks
-need no special case); `enabled = false` turns a check off: it is not run, and a rule only it covered
-ends as not_checked, which never blocks validity. A check whose measure has no sensible second level
-(`photo_format`) keeps the one it has.
+turns a level off (in the code an off level is +inf or -inf, which no measurement reaches; core/levels.py
+grades every check); `enabled = false` turns a check off: it is not run, and a rule only it covered ends
+as not_checked, which never blocks validity. A few levels carry older names or are a (low, high) pair
+(`OTHER_LEVELS`); `false` turns those off the same way. A parameter that was renamed keeps answering to
+its old name (`RENAMED`), so a thresholds file written earlier still loads.
 """
 import inspect
 import math
@@ -184,24 +186,52 @@ def warn_fail(name: str) -> Tuple[Optional[float], Optional[float]]:
 Check = Tuple[str, Callable, Dict[str, Any]]  # (name, function, keyword arguments), as the validator registers them
 LEVEL_PREFIXES = ('warn_', 'fail_')
 
+# Levels the prefix does not show (they were named before the convention) or whose off value is not a single
+# ±inf (a width and height, a low and high end), by check, with the value that turns each off. The names stay,
+# since thresholds files use them; `false` works on them as on any level.
+OTHER_LEVELS: Dict[str, Dict[str, Any]] = {
+    'resolution': {'min_res': (0, 0), 'recommended_res': (0, 0)},  # no photo is smaller than 0x0: fail, warn
+    'photo_format': {'tolerance': math.inf},  # its fail level
+    'face_centered': {'vertical_range': (-math.inf, math.inf), 'fail_vertical_range': (-math.inf, math.inf)},
+}
+
+# Parameters that were renamed, by check: the old name -> the name it has now. A thresholds file may use either
+RENAMED: Dict[str, Dict[str, str]] = {
+    'background_brightness': {'min_brightness': 'warn_below'},
+    'background_uniformity': {'variance_threshold': 'fail_above'},
+    'background_consistency': {'cov_threshold': 'fail_above'},
+}
+
 
 class ThresholdsFileError(ValueError):
     """A thresholds file names a check or a parameter the validator does not have, or gives a wrong type."""
 
 
-def is_level(key: str) -> bool:
-    """Whether a parameter is a warn or fail level, the kind `false` turns off."""
-    return key.startswith(LEVEL_PREFIXES)
+def is_level(key: str, check: Optional[str] = None) -> bool:
+    """Whether a parameter is a warn or fail level, the kind `false` turns off. With `check`, the levels
+    that check has under other names count too (`OTHER_LEVELS`)."""
+    return key.startswith(LEVEL_PREFIXES) or key in OTHER_LEVELS.get(check, {})
 
 
-def off_value(key: str) -> float:
+def off_value(key: str, check: Optional[str] = None) -> Any:
     """The value that turns a level off: nothing is above +inf, nothing below -inf."""
+    if key in OTHER_LEVELS.get(check, {}):
+        return OTHER_LEVELS[check][key]
     return -math.inf if key.endswith('_below') else math.inf
 
 
 def is_off(value: Any) -> bool:
     """Whether a level is turned off (±inf)."""
     return isinstance(value, float) and math.isinf(value)
+
+
+def level_is_off(check: str, key: str, value: Any) -> bool:
+    """Whether `value` turns the level `key` of `check` off: ±inf, or the off value of a level in `OTHER_LEVELS`."""
+    if not is_level(key, check):
+        return False
+    if isinstance(value, (tuple, list)):
+        return tuple(value) == off_value(key, check)
+    return is_off(value)
 
 
 def load_overrides(path: str) -> Dict[str, Dict[str, Any]]:
@@ -234,6 +264,10 @@ def parameters(check: Callable, kwargs: Dict[str, Any]) -> Dict[str, Any]:
     return found
 
 
+def _is_number(value: Any) -> bool:
+    return isinstance(value, Real) and not isinstance(value, bool)
+
+
 def _kind(value: Any) -> Optional[str]:
     if isinstance(value, bool):
         return 'true or false'
@@ -242,6 +276,19 @@ def _kind(value: Any) -> Optional[str]:
     if isinstance(value, (tuple, list)):
         return 'list of numbers'
     return None
+
+
+def _renamed(name: str, values: Dict[str, Any], source: str) -> Dict[str, Any]:
+    """The table of one check with old parameter names (`RENAMED`) replaced by the current ones."""
+    out = {}
+    for key, value in values.items():
+        new = RENAMED.get(name, {}).get(key, key)
+        if new in out or (new != key and new in values):
+            old = next(o for o, n in RENAMED[name].items() if n == new)
+            raise ThresholdsFileError(f'{source}: [{name}] sets both {old} and {new}, the old and the new name '
+                                      f'of one parameter. Keep {new}')
+        out[new] = value
+    return out
 
 
 def disabled_in(overrides: Dict[str, Dict[str, Any]], source: str = 'thresholds file') -> Set[str]:
@@ -271,7 +318,7 @@ def apply_overrides(checks: List[Check], overrides: Dict[str, Dict[str, Any]], s
     for name, check, kwargs in checks:
         new_kwargs = dict(kwargs)
         allowed = parameters(check, kwargs)
-        for key, value in overrides.get(name, {}).items():
+        for key, value in _renamed(name, overrides.get(name, {}), source).items():
             if key == 'enabled':
                 if not isinstance(value, bool):
                     raise ThresholdsFileError(f'{source}: [{name}] enabled must be true or false, not {value!r}')
@@ -279,14 +326,20 @@ def apply_overrides(checks: List[Check], overrides: Dict[str, Dict[str, Any]], s
             if key not in allowed:
                 takes = ', '.join(allowed) if allowed else 'no parameters'
                 raise ThresholdsFileError(f'{source}: [{name}] has no parameter {key}. It takes: enabled, {takes}')
-            if is_level(key) and value is False:
-                new_kwargs[key] = off_value(key)
+            if is_level(key, name) and value is False:
+                new_kwargs[key] = off_value(key, name)
                 continue
             current = allowed[key]
             kind = _kind(current) if current is not None else _kind(value)
-            if kind is None or kind != _kind(value):
+            if isinstance(current, (tuple, list)):
+                # A list is unpacked by the check, so its length and what it holds are checked here too
+                kind = f'list of {len(current)} numbers'
+                right = isinstance(value, list) and len(value) == len(current) and all(_is_number(v) for v in value)
+            else:
+                right = kind is not None and kind == _kind(value)
+            if not right:
                 wanted = kind or 'number'
-                if is_level(key):
+                if is_level(key, name):
                     wanted += ', or false to turn the level off'
                 raise ThresholdsFileError(f'{source}: [{name}] {key} must be a {wanted}, not {value!r}')
             new_kwargs[key] = tuple(value) if isinstance(current, tuple) else value
@@ -297,10 +350,10 @@ def apply_overrides(checks: List[Check], overrides: Dict[str, Dict[str, Any]], s
 def _toml_value(value: Any) -> str:
     if isinstance(value, bool):
         return 'true' if value else 'false'
-    if is_off(value):
-        return 'false'
     if isinstance(value, (tuple, list)):
         return '[' + ', '.join(_toml_value(v) for v in value) + ']'
+    if is_off(value):
+        return 'inf' if value > 0 else '-inf'  # TOML's own spelling; an end of a range that is open
     if isinstance(value, float):
         return repr(float(value))
     return str(value)
@@ -315,8 +368,10 @@ def to_toml(checks: List[Check], disabled: Set[str] = frozenset()) -> str:
         '#   THRESHOLDS_FILE=thresholds.toml uv run passport-validator-api',
         '# A section is a check, its keys are the parameters of that check (core/thresholds.py says where',
         '# the calibrated numbers came from; the others are the defaults of the check functions).',
-        '# warn_... and fail_... are the levels: false turns one off. enabled = false turns the whole check off;',
-        '# a rule only that check covered is then not_checked, which never blocks validity.',
+        '# warn_... and fail_... are the levels: false turns one off (also min_res and recommended_res of',
+        '# resolution, tolerance of photo_format and vertical_range of face_centered, which are levels too).',
+        '# enabled = false turns the whole check off; a rule only that check covered is then not_checked,',
+        '# which never blocks validity.',
         '',
     ]
     for name, check, kwargs in checks:
@@ -328,6 +383,8 @@ def to_toml(checks: List[Check], disabled: Set[str] = frozenset()) -> str:
         for key, value in found.items():
             if value is None:
                 lines.append(f'# {key}: unset')
+            elif level_is_off(name, key, value):
+                lines.append(f'{key} = false')
             else:
                 lines.append(f'{key} = {_toml_value(value)}')
         lines.append('')

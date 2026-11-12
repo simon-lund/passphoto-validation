@@ -10,6 +10,7 @@ import typer
 from PIL import Image
 from rich import box
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -30,18 +31,47 @@ THRESHOLDS_OPTION = typer.Option(
     "-t",
     exists=True,
     dir_okay=False,
-    help="A TOML file that overrides check parameters (start from `passport-validator thresholds`)",
+    help="A TOML file that overrides check parameters (start from `passport-validator thresholds`); "
+         "without it, the file THRESHOLDS_FILE names, if set",
+)
+CONFIDENCE_OPTION = typer.Option(
+    None,
+    "--confidence",
+    "-c",
+    min=0.0,
+    max=1.0,
+    help="Minimum face detection confidence (0.0-1.0); without it, MIN_DETECTION_CONFIDENCE or 0.5",
 )
 
 
-def _validator(confidence: float, thresholds: Optional[Path]) -> PassportPhotoValidator:
+def _config(confidence: Optional[float] = None, thresholds: Optional[Path] = None) -> ValidatorConfig:
+    """The configuration for the CLI's options. An option that is not given is left out, so the environment
+    and .env decide it (THRESHOLDS_FILE, MIN_DETECTION_CONFIDENCE), as they do for the API: a value passed
+    to ValidatorConfig, None included, would override them."""
+    given = {}
+    if confidence is not None:
+        given['min_detection_confidence'] = confidence
+    if thresholds is not None:
+        given['thresholds_file'] = str(thresholds)
+    return ValidatorConfig(**given)
+
+
+def _thresholds_error(exc: ThresholdsFileError):
+    """End the command with the message of a bad thresholds file. Escaped: the message names the check as
+    [check], which Rich would read as markup and drop."""
+    console.print(f"[red]{escape(str(exc))}[/red]")
+    raise typer.Exit(2)
+
+
+def _validator(confidence: Optional[float], thresholds: Optional[Path]) -> PassportPhotoValidator:
     """The validator for the CLI's options; a bad thresholds file ends the command with its message."""
-    config = ValidatorConfig(min_detection_confidence=confidence, thresholds_file=str(thresholds) if thresholds else None)
     try:
-        return PassportPhotoValidator(config)
+        validator = PassportPhotoValidator(_config(confidence, thresholds))
     except ThresholdsFileError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(2)
+        _thresholds_error(exc)
+    if validator.config.thresholds_file:
+        console.print(f"[dim]Thresholds file: {escape(validator.config.thresholds_file)}[/dim]")
+    return validator
 
 
 def load_image(image_path: Path) -> np.ndarray:
@@ -50,7 +80,7 @@ def load_image(image_path: Path) -> np.ndarray:
         image = Image.open(image_path)
         return prepare_image(image)
     except Exception as e:
-        console.print(f"[red]Error loading image:[/red] {e}")
+        console.print(f"[red]Error loading image:[/red] {escape(str(e))}")
         raise typer.Exit(1)
 
 
@@ -68,14 +98,7 @@ def validate(
         "-o",
         help="Save report as JSON to this file"
     ),
-    confidence: float = typer.Option(
-        0.5,
-        "--confidence",
-        "-c",
-        min=0.0,
-        max=1.0,
-        help="Minimum face detection confidence (0.0-1.0)"
-    ),
+    confidence: Optional[float] = CONFIDENCE_OPTION,
     verbose: bool = typer.Option(
         False,
         "--verbose",
@@ -89,7 +112,7 @@ def validate(
 
     Returns a detailed report with errors, warnings, and recommendations.
     """
-    console.print(f"\n[cyan]Validating:[/cyan] {image_path}")
+    console.print(f"\n[cyan]Validating:[/cyan] {escape(str(image_path))}")
 
     # Load image
     with console.status("[bold cyan]Loading image..."):
@@ -108,10 +131,16 @@ def validate(
         report_dict = report.to_dict()
         with open(output, 'w') as f:
             json.dump(report_dict, f, indent=2)
-        console.print(f"\n[green]Report saved to:[/green] {output}")
+        console.print(f"\n[green]Report saved to:[/green] {escape(str(output))}")
 
     # Exit with appropriate code
     sys.exit(0 if report.is_valid else 1)
+
+
+def _not_checked(report) -> list:
+    """The rules no check judged (their checks are turned off in the thresholds file, or none covers them).
+    They never block validity, so the output has to say that they were left out."""
+    return [rule for rule in report.rules if rule.status == 'not_checked']
 
 
 def _display_report(report, verbose: bool):
@@ -124,9 +153,12 @@ def _display_report(report, verbose: bool):
     else:
         status = "[bold red]✗ INVALID[/bold red]"
         status_color = "red"
+    not_checked = _not_checked(report)
+    left_out = (f"\n[yellow]{len(not_checked)} of {len(report.rules)} rules were not checked[/yellow]"
+                if not_checked else "")
 
     console.print(Panel(
-        f"{status}\n\n[bold]Overall Score:[/bold] {report.overall_score:.1f}/100",
+        f"{status}\n\n[bold]Overall Score:[/bold] {report.overall_score:.1f}/100{left_out}",
         title="Validation Result",
         border_style=status_color,
         box=box.ROUNDED
@@ -145,20 +177,29 @@ def _display_report(report, verbose: bool):
         for problem in report.problems:
             rest = ' '.join(problem.reasons)
             rest = rest[len(problem.headline):].strip() if rest.startswith(problem.headline) else rest
-            text = f"[bold]{problem.headline}[/bold]" + (f"\n{rest}" if rest else '')
-            rules = '\n'.join(titles.get(rule, rule) for rule in problem.rules)
+            text = f"[bold]{escape(problem.headline)}[/bold]" + (f"\n{escape(rest)}" if rest else '')
+            rules = '\n'.join(escape(titles.get(rule, rule)) for rule in problem.rules)
             if problem.not_judged:
-                rules += '\n[dim]not judged because of this: ' + ', '.join(titles.get(rule, rule) for rule in problem.not_judged) + '[/dim]'
+                rules += ('\n[dim]not judged because of this: '
+                          + ', '.join(escape(titles.get(rule, rule)) for rule in problem.not_judged) + '[/dim]')
             table.add_row(labels.get(problem.status, problem.status.upper()), text, rules)
         console.print(table)
+    elif not_checked:
+        passed = sum(1 for rule in report.rules if rule.status == 'pass')
+        console.print(f"\n[bold green]✓ No problems in the {passed} rules that were checked.[/bold green]")
     else:
         console.print("\n[bold green]✓ Every rule passes.[/bold green]")
+    if not_checked:
+        console.print(f"\n[bold yellow]{len(not_checked)} rule(s) not checked[/bold yellow] "
+                      f"(their checks are turned off in the thresholds file):")
+        for rule in not_checked:
+            console.print(f"  [dim]{escape(rule.title)}[/dim]")
 
     # Suggested crop
     if report.suggested_crop:
         console.print(f"\n[bold yellow]💡 Suggestion:[/bold yellow]")
         crop = report.suggested_crop
-        console.print(f"  {crop['reason']}")
+        console.print(f"  {escape(crop['reason'])}")
         console.print(f"  Crop region: x={crop['x']}, y={crop['y']}, "
                       f"width={crop['width']}, height={crop['height']}")
 
@@ -169,18 +210,18 @@ def _display_report(report, verbose: bool):
         console.print(f"\n[bold]Crop to 35x45:[/bold] x={crop.x}, y={crop.y}, width={crop.width}, height={crop.height}")
         console.print(f"  Fixes {len(crop.fixed_rules)} rule(s); the cropped photo is {verdict}.")
     elif crop and crop.status == 'not_possible':
-        console.print(f"\n[bold]Crop to 35x45:[/bold] not possible. {crop.reason}")
+        console.print(f"\n[bold]Crop to 35x45:[/bold] not possible. {escape(crop.reason)}")
 
     # Every check, then the measurements (verbose mode)
     if verbose:
         console.print("\n[bold]Checks:[/bold]")
         for check in report.checks:
             reasons = f" {' '.join(check.reasons)}" if check.reasons else ''
-            console.print(f"  {check.status:8} {check.name}{reasons}")
+            console.print(f"  {check.status:8} {check.name}{escape(reasons)}")
     if verbose and report.measurements:
         console.print("\n[bold]Measurements:[/bold]")
         for key, value in report.measurements.items():
-            console.print(f"  • {key}: {value}")
+            console.print(f"  • {key}: {escape(str(value))}")
 
 
 @app.command()
@@ -203,14 +244,7 @@ def batch(
         "-p",
         help="File pattern to match (e.g., '*.jpg', '*.png')"
     ),
-    confidence: float = typer.Option(
-        0.5,
-        "--confidence",
-        "-c",
-        min=0.0,
-        max=1.0,
-        help="Minimum face detection confidence"
-    ),
+    confidence: Optional[float] = CONFIDENCE_OPTION,
     thresholds: Optional[Path] = THRESHOLDS_OPTION,
 ):
     """
@@ -222,7 +256,7 @@ def batch(
     image_files = list(input_dir.glob(pattern))
 
     if not image_files:
-        console.print(f"[red]No images found matching pattern '{pattern}' in {input_dir}[/red]")
+        console.print(f"[red]No images found matching pattern '{escape(pattern)}' in {escape(str(input_dir))}[/red]")
         raise typer.Exit(1)
 
     console.print(f"\n[cyan]Found {len(image_files)} image(s) to validate[/cyan]\n")
@@ -238,21 +272,23 @@ def batch(
     valid_count = 0
 
     for image_path in image_files:
-        console.print(f"[cyan]Processing:[/cyan] {image_path.name}")
+        console.print(f"[cyan]Processing:[/cyan] {escape(image_path.name)}")
         image_np = load_image(image_path)
 
         try:
             report = validator(image_np)
 
 
+            not_checked = len(_not_checked(report))
+            left_out = f", {not_checked} rules not checked" if not_checked else ""
             if report.is_valid:
-                console.print(f"  [green]✓ Valid (score: {report.overall_score:.1f})[/green]")
+                console.print(f"  [green]✓ Valid (score: {report.overall_score:.1f}{left_out})[/green]")
                 valid_count += 1
             else:
                 console.print(f"  [red]✗ Invalid (score: {report.overall_score:.1f})[/red]")
                 console.print(f"    {len([i for i in report.issues if i.category == 'error'])} errors, "
                               f"{len([i for i in report.issues if i.category == 'warning'])} warnings, "
-                              f"{len(report.skipped_rules)} rules not checked")
+                              f"{len(report.skipped_rules)} rules not judged{left_out}")
 
             results.append({
                 'filename': image_path.name,
@@ -268,7 +304,7 @@ def batch(
                     json.dump(report.to_dict(), f, indent=2)
 
         except Exception as e:
-            console.print(f"  [red]Error: {e}[/red]")
+            console.print(f"  [red]Error: {escape(str(e))}[/red]")
             results.append({
                 'filename': image_path.name,
                 'valid': False,
@@ -283,23 +319,24 @@ def batch(
     console.print(f"  [red]Invalid: {len(image_files) - valid_count}[/red]")
 
     if output_dir:
-        console.print(f"\n[green]Reports saved to:[/green] {output_dir}")
+        console.print(f"\n[green]Reports saved to:[/green] {escape(str(output_dir))}")
 
 
 @app.command()
 def thresholds(thresholds: Optional[Path] = THRESHOLDS_OPTION):
     """Print every parameter of every check with its current value, as a TOML thresholds file.
 
-    Save it, keep the lines to change, and pass the file back with --thresholds (or THRESHOLDS_FILE for the API).
-    warn_... and fail_... are the levels, false turns one off; enabled = false turns a check off.
+    Save it, keep the lines to change, and pass the file back with --thresholds (or set THRESHOLDS_FILE,
+    which the CLI, the API and the review page all read). The values are the ones in effect, so with
+    THRESHOLDS_FILE set they include that file's. warn_... and fail_... are the levels, false turns one off;
+    enabled = false turns a check off.
     """
-    config = ValidatorConfig(thresholds_file=str(thresholds) if thresholds else None)
     try:
+        config = _config(thresholds=thresholds)
         checks = PassportPhotoValidator.registered_checks(config)
         disabled = PassportPhotoValidator.disabled_checks(config)
     except ThresholdsFileError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(2)
+        _thresholds_error(exc)
     typer.echo(to_toml(checks, disabled))
 
 

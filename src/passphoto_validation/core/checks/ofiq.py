@@ -6,7 +6,8 @@ passed in from the validator are calibrated on labelled photos (see notebooks/ev
 """
 import re
 
-from ..models import CheckSkipped, ValidationContext, ValidationIssue
+from ..levels import first_on, judge
+from ..models import CheckSkipped, ValidationContext
 from ..ofiq import Measure
 
 _POSE_MEASURES = {'yaw': 'HeadPoseYaw', 'pitch': 'HeadPosePitch', 'roll': 'HeadPoseRoll'}
@@ -38,12 +39,9 @@ def check_quality(context: ValidationContext, measure_name: str, problem: str,
     :param fail_below: Quality below this fails.
     """
     quality = measure(context, measure_name).quality
-    if quality < fail_below:
-        context.issues.append(ValidationIssue(
-            category='error', message=f'{problem} (OFIQ {measure_name} {quality:.0f}/100).', severity=8))
-    elif quality < warn_below:
-        context.issues.append(ValidationIssue(
-            category='warning', message=f'{problem}? (OFIQ {measure_name} {quality:.0f}/100).', severity=5))
+    judge(context, quality, warn_below=warn_below, fail_below=fail_below,
+          fail=(f'{problem} (OFIQ {measure_name} {quality:.0f}/100).', 8),
+          warn=(f'{problem}? (OFIQ {measure_name} {quality:.0f}/100).', 5))
 
 
 def check_pose(context: ValidationContext, axis: str, warn_above: float, fail_above: float):
@@ -56,9 +54,8 @@ def check_pose(context: ValidationContext, axis: str, warn_above: float, fail_ab
     angle = measure(context, _POSE_MEASURES[axis]).native
     context.measurements[f'head_{axis}_degrees_ofiq'] = angle
     what = {'yaw': 'turned', 'pitch': 'tilted up or down', 'roll': 'tilted sideways'}[axis]
-    if abs(angle) > fail_above:
-        context.issues.append(ValidationIssue(
-            category='error', message=f'Head is {what} by {abs(angle):.1f}° (max {warn_above:.0f}°).', severity=9))
-    elif abs(angle) > warn_above:
-        context.issues.append(ValidationIssue(
-            category='warning', message=f'Head is slightly {what} ({abs(angle):.1f}°).', severity=6))
+    # The angle the message names as the limit: the warn level, or the fail level when warning is off
+    limit = first_on(warn_above, fail_above)
+    judge(context, abs(angle), warn_above=warn_above, fail_above=fail_above,
+          fail=(f'Head is {what} by {abs(angle):.1f}°' + (f' (max {limit:.0f}°).' if limit is not None else '.'), 9),
+          warn=(f'Head is slightly {what} ({abs(angle):.1f}°).', 6))

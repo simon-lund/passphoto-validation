@@ -4,6 +4,7 @@ from typing import Tuple
 import cv2
 import numpy as np
 
+from ..levels import judge
 from ..models import CheckSkipped, ValidationIssue, ValidationContext
 
 
@@ -11,8 +12,8 @@ def check_resolution(context: ValidationContext, min_res: Tuple[int, int] = (413
     """Check if image has sufficient resolution.
 
     :param context: The validation context containing the image and results.
-    :param min_res: The minimum allowed resolution as a (width, height) tuple.
-    :param recommended_res: The recommended minimum resolution as a (width, height) tuple.
+    :param min_res: The (width, height) below which it fails; (0, 0) turns that off.
+    :param recommended_res: The (width, height) below which it warns; (0, 0) turns that off.
     """
     width, height = context.width, context.height
     min_width, min_height = min_res
@@ -61,12 +62,8 @@ def check_face_sharpness(context: ValidationContext, warn_below: float, fail_bel
 
     sharpness = float(laplacian / gradient)
     context.measurements['face_sharpness'] = sharpness
-    if sharpness < fail_below:
-        context.issues.append(ValidationIssue(
-            category='error', message='Face is blurry. The photo must be sharp.', severity=8))
-    elif sharpness < warn_below:
-        context.issues.append(ValidationIssue(
-            category='warning', message='Face may be slightly blurry.', severity=5))
+    judge(context, sharpness, warn_below=warn_below, fail_below=fail_below,
+          fail=('Face is blurry. The photo must be sharp.', 8), warn=('Face may be slightly blurry.', 5))
 
 
 def check_compression_blocks(context: ValidationContext, warn_above: float, fail_above: float):
@@ -88,12 +85,9 @@ def check_compression_blocks(context: ValidationContext, warn_above: float, fail
 
     blockiness = float(np.mean(ratios))
     context.measurements['jpeg_blockiness'] = blockiness
-    if blockiness > fail_above:
-        context.issues.append(ValidationIssue(
-            category='error', message='Strong compression artefacts (blocky image). Save with higher quality.', severity=8))
-    elif blockiness > warn_above:
-        context.issues.append(ValidationIssue(
-            category='warning', message='Visible compression artefacts.', severity=5))
+    judge(context, blockiness, warn_above=warn_above, fail_above=fail_above,
+          fail=('Strong compression artefacts (blocky image). Save with higher quality.', 8),
+          warn=('Visible compression artefacts.', 5))
 
 
 def check_print_defects(context: ValidationContext, fail_at: int, warn_at: int = 1, min_area_share: float = 0.0002,
@@ -143,11 +137,6 @@ def check_print_defects(context: ValidationContext, fail_at: int, warn_at: int =
     context.measurements['background_marks'] = len(marks)
     context.measurements['background_marks_area'] = float(sum(marks) / area)
 
-    if len(marks) >= fail_at:
-        context.issues.append(ValidationIssue(
-            category='error', severity=6,
-            message=f'{len(marks)} marks on the background (spots, stains or scratches). The print or scan must be clean.'))
-    elif len(marks) >= warn_at:
-        context.issues.append(ValidationIssue(
-            category='warning', severity=3,
-            message='A mark on the background (a spot, stain or scratch).'))
+    judge(context, len(marks), warn_at=warn_at, fail_at=fail_at,
+          fail=(f'{len(marks)} marks on the background (spots, stains or scratches). The print or scan must be clean.', 6),
+          warn=('A mark on the background (a spot, stain or scratch).', 3))

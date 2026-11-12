@@ -2,8 +2,9 @@
 
     OFIQ_CONFIG_DIR=<OFIQ>/data uv run python scripts/run_eval.py --set data/london-eval
 
-With several workers, give OFIQ a config that limits its threads (OFIQ_CONFIG_FILE, e.g. a copy of
-ofiq_config.jaxn with "ort_intra_threads": 3), or the workers starve each other.
+With several workers OFIQ must not take every core in each of them, or the workers starve one another. So
+unless OFIQ_CONFIG_FILE says otherwise, several workers run with ofiq_config_eval.jaxn (3 threads each),
+which install.sh writes next to ofiq_config.jaxn; when that file is missing the run says so and goes on.
 
 Writes results.jsonl (or --out) next to the manifest: one line per photo with its manifest row, every check
 (status, reasons, numeric measurements), every rule status and the problems (the causes, with the rules each decided).
@@ -12,25 +13,44 @@ import argparse
 import csv
 import json
 import os
+import sys
 from multiprocessing import Pool
 from pathlib import Path
 
+EVAL_OFIQ_CONFIG = 'ofiq_config_eval.jaxn'  # install.sh writes it: ofiq_config.jaxn with 3 ORT threads
 _validator = None
 
 
-def _init():
+def ofiq_config_file(workers: int):
+    """The OFIQ config file the workers run with, or None for the configured one (OFIQ_CONFIG_FILE, .env).
+
+    With several workers and nothing configured, the thread-limited copy is used when it is there.
+    """
+    from passphoto_validation.core import ValidatorConfig
+    config = ValidatorConfig()
+    if workers < 2 or 'ofiq_config_file' in config.model_fields_set or not config.ofiq_config_dir:
+        return None
+    if (Path(config.ofiq_config_dir) / EVAL_OFIQ_CONFIG).exists():
+        return EVAL_OFIQ_CONFIG
+    print(f'{workers} workers, and no {EVAL_OFIQ_CONFIG} in {config.ofiq_config_dir}: OFIQ takes every core in each '
+          f'worker, which is slow. ./install.sh writes that file; --workers 1 avoids the problem.', file=sys.stderr)
+    return None
+
+
+def _init(ofiq_file=None):
     global _validator
     import cv2
     # Every worker would otherwise start a thread per core in OpenCV
     cv2.setNumThreads(1)
-    from passphoto_validation.core import PassportPhotoValidator
-    _validator = PassportPhotoValidator()
+    from passphoto_validation.core import PassportPhotoValidator, ValidatorConfig
+    _validator = PassportPhotoValidator(ValidatorConfig(ofiq_config_file=ofiq_file) if ofiq_file else None)
 
 
 def _run(job):
     row, path = job
     import cv2
-    report = _validator(cv2.imread(path))
+    # Without the crop: it checks the cropped photo a second time, and the rows carry nothing of it
+    report = _validator(cv2.imread(path), crop=False)
     return {
         **row,
         'checks': {
@@ -62,7 +82,10 @@ def main():
     jobs = [(row, str(args.set / row['file'])) for row in rows]
 
     out = args.set / args.out
-    with Pool(args.workers, initializer=_init) as pool, open(out, 'w') as f:
+    ofiq_file = ofiq_config_file(args.workers)
+    if ofiq_file:
+        print(f'{args.workers} workers, OFIQ with {ofiq_file}', flush=True)
+    with Pool(args.workers, initializer=_init, initargs=(ofiq_file,)) as pool, open(out, 'w') as f:
         for i, result in enumerate(pool.imap(_run, jobs, chunksize=4), 1):
             f.write(json.dumps(result) + '\n')
             if i % 100 == 0:

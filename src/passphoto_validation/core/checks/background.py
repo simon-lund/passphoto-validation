@@ -6,7 +6,8 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
-from ..models import CheckSkipped, ValidationIssue, ValidationContext
+from ..levels import judge
+from ..models import CheckSkipped, ValidationContext
 
 mp_selfie_segmentation = mp.solutions.selfie_segmentation
 
@@ -172,18 +173,9 @@ def check_background_brightness(context: ValidationContext, warn_below: float = 
     mean_brightness = np.mean(gray_full[background_mask_binary == 1])
     context.measurements['background_brightness'] = float(mean_brightness)
 
-    if fail_below is not None and mean_brightness < fail_below:
-        context.issues.append(ValidationIssue(
-            category='error',
-            message=f'Background is dark (brightness: {mean_brightness:.2f}). It must be light, ideally grey.',
-            severity=7
-        ))
-    elif mean_brightness < warn_below:
-        context.issues.append(ValidationIssue(
-            category='warning',
-            message=f'Background is quite dark (brightness: {mean_brightness:.2f}). Consider using a lighter background.',
-            severity=4
-        ))
+    judge(context, mean_brightness, warn_below=warn_below, fail_below=fail_below,
+          fail=(f'Background is dark (brightness: {mean_brightness:.2f}). It must be light, ideally grey.', 7),
+          warn=(f'Background is quite dark (brightness: {mean_brightness:.2f}). Consider using a lighter background.', 4))
 
     if debug:
         return {'brightness': mean_brightness}
@@ -214,12 +206,8 @@ def check_background_uniformity(context: ValidationContext, fail_above: float = 
     context.measurements['background_within_rect_variance'] = float(within_rect_variance)
     context.measurements['background_rect_count'] = len(rectangles)
 
-    if within_rect_variance > fail_above or within_rect_variance > warn_above:
-        context.issues.append(ValidationIssue(
-            category='error' if within_rect_variance > fail_above else 'warning',
-            message=f'Background has high local color variation (variance: {within_rect_variance:.2f}), indicating clutter.',
-            severity=7
-        ))
+    finding = (f'Background has high local color variation (variance: {within_rect_variance:.2f}), indicating clutter.', 7)
+    judge(context, within_rect_variance, warn_above=warn_above, fail_above=fail_above, fail=finding, warn=finding)
 
     if debug:
         return {
@@ -262,18 +250,9 @@ def check_background_pattern(context: ValidationContext, warn_above: float, fail
     context.measurements['background_median_rect_variance'] = median_variance
     context.measurements['background_rect_count'] = len(rectangles)
 
-    if median_variance > fail_above:
-        context.issues.append(ValidationIssue(
-            category='error',
-            message=f'Background is patterned (median local variance: {median_variance:.1f}). Background must be plain.',
-            severity=7
-        ))
-    elif median_variance > warn_above:
-        context.issues.append(ValidationIssue(
-            category='warning',
-            message=f'Background may be patterned (median local variance: {median_variance:.1f}).',
-            severity=4
-        ))
+    judge(context, median_variance, warn_above=warn_above, fail_above=fail_above,
+          fail=(f'Background is patterned (median local variance: {median_variance:.1f}). Background must be plain.', 7),
+          warn=(f'Background may be patterned (median local variance: {median_variance:.1f}).', 4))
 
     if debug:
         return {'median_rect_variance': median_variance, 'rect_variances': variances, 'rectangles': rectangles}
@@ -304,12 +283,8 @@ def check_background_consistency(context: ValidationContext, fail_above: float =
     context.measurements['background_color_coherence_cov'] = float(color_coherence_cov)
     context.measurements['background_rect_count'] = len(rectangles)
 
-    if color_coherence_cov > fail_above or color_coherence_cov > warn_above:
-        context.issues.append(ValidationIssue(
-            category='error' if color_coherence_cov > fail_above else 'warning',
-            message=f'Background has inconsistent color transitions (CoV: {color_coherence_cov:.2f}), indicating non-uniform background.',
-            severity=6
-        ))
+    finding = (f'Background has inconsistent color transitions (CoV: {color_coherence_cov:.2f}), indicating non-uniform background.', 6)
+    judge(context, color_coherence_cov, warn_above=warn_above, fail_above=fail_above, fail=finding, warn=finding)
 
     if debug:
         return {'color_coherence_cov': color_coherence_cov}
@@ -381,14 +356,9 @@ def check_background_gradient(context: ValidationContext, warn_above: float, fai
     span = float(abs(a) + abs(b))
     context.measurements['background_gradient'] = span
 
-    if span > fail_above:
-        context.issues.append(ValidationIssue(
-            category='error', severity=6,
-            message=f'The background runs from light to dark (by {span:.0f} L* across the photo). It must be evenly lit, in one colour.'))
-    elif span > warn_above:
-        context.issues.append(ValidationIssue(
-            category='warning', severity=3,
-            message=f'The background is lighter on one side than the other (by {span:.0f} L* across the photo).'))
+    judge(context, span, warn_above=warn_above, fail_above=fail_above,
+          fail=(f'The background runs from light to dark (by {span:.0f} L* across the photo). It must be evenly lit, in one colour.', 6),
+          warn=(f'The background is lighter on one side than the other (by {span:.0f} L* across the photo).', 3))
 
 
 def _rim_shadow_depth(context: ValidationContext, plane: np.ndarray, residual: np.ndarray, distance: np.ndarray,
@@ -472,11 +442,6 @@ def check_background_shadow(context: ValidationContext, warn_above: float, fail_
     context.measurements['background_shadow_share'] = float((residual[near] < -4).mean())
     depth = max(band_depth, rim_depth)
 
-    if depth > fail_above:
-        context.issues.append(ValidationIssue(
-            category='error', severity=6,
-            message=f'A shadow falls on the background next to the person ({depth:.0f} L* darker). Light the background evenly or move away from it.'))
-    elif depth > warn_above:
-        context.issues.append(ValidationIssue(
-            category='warning', severity=3,
-            message=f'The background is darker next to the person ({depth:.0f} L*), which looks like a shadow.'))
+    judge(context, depth, warn_above=warn_above, fail_above=fail_above,
+          fail=(f'A shadow falls on the background next to the person ({depth:.0f} L* darker). Light the background evenly or move away from it.', 6),
+          warn=(f'The background is darker next to the person ({depth:.0f} L*), which looks like a shadow.', 3))

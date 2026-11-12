@@ -5,7 +5,8 @@ from typing import Tuple
 import cv2
 import numpy as np
 
-from ..models import CheckSkipped, ValidationContext, ValidationIssue
+from ..levels import judge
+from ..models import CheckSkipped, ValidationContext
 from ..ofiq import LANDMARK_LEFT_EYE, LANDMARK_RIGHT_EYE, PARSING_LABELS
 from ..utils import mesh_points
 
@@ -45,12 +46,9 @@ def check_gaze(context: ValidationContext, warn_above: float, fail_above: float)
     context.measurements['gaze_vertical'] = float(vertical)
 
     offset = max(abs(horizontal), abs(vertical))
-    if offset > fail_above:
-        context.issues.append(ValidationIssue(
-            category='error', message='Eyes are not looking into the camera.', severity=8))
-    elif offset > warn_above:
-        context.issues.append(ValidationIssue(
-            category='warning', message='Eyes may not be looking straight into the camera.', severity=5))
+    judge(context, offset, warn_above=warn_above, fail_above=fail_above,
+          fail=('Eyes are not looking into the camera.', 8),
+          warn=('Eyes may not be looking straight into the camera.', 5))
 
 
 def _disk(context: ValidationContext, centre, radius: float) -> np.ndarray:
@@ -88,12 +86,8 @@ def check_red_eyes(context: ValidationContext, fail_above: float, warn_above: fl
         raise CheckSkipped('Could not find the pupils.')
 
     context.measurements['red_eye_share'] = max(shares)
-    if max(shares) > fail_above:
-        context.issues.append(ValidationIssue(
-            category='error', message='Red eyes detected. Retake the photo without red-eye.', severity=8))
-    elif max(shares) > warn_above:
-        context.issues.append(ValidationIssue(
-            category='warning', message='The pupils may be red.', severity=5))
+    judge(context, max(shares), warn_above=warn_above, fail_above=fail_above,
+          fail=('Red eyes detected. Retake the photo without red-eye.', 8), warn=('The pupils may be red.', 5))
 
 
 def _glasses(context: ValidationContext):
@@ -162,12 +156,9 @@ def check_glasses_tint(context: ValidationContext, min_glasses_share: float, war
 
     ratio = min(ratios)
     context.measurements['lens_brightness_ratio'] = ratio
-    if ratio < fail_below:
-        context.issues.append(ValidationIssue(
-            category='error', message='Glasses appear tinted. Tinted glasses and sunglasses are not allowed.', severity=8))
-    elif ratio < warn_below:
-        context.issues.append(ValidationIssue(
-            category='warning', message='Glasses may be tinted.', severity=5))
+    judge(context, ratio, warn_below=warn_below, fail_below=fail_below,
+          fail=('Glasses appear tinted. Tinted glasses and sunglasses are not allowed.', 8),
+          warn=('Glasses may be tinted.', 5))
 
 
 def check_glasses_glare(context: ValidationContext, min_glasses_share: float, warn_above: float, fail_above: float):
@@ -195,12 +186,9 @@ def check_glasses_glare(context: ValidationContext, min_glasses_share: float, wa
 
     share = float(specular[lens].mean())
     context.measurements['lens_glare_share'] = share
-    if share > fail_above:
-        context.issues.append(ValidationIssue(
-            category='error', message='Reflections on the glasses. Tilt the glasses or change the lighting.', severity=8))
-    elif share > warn_above:
-        context.issues.append(ValidationIssue(
-            category='warning', message='Possible reflections on the glasses.', severity=5))
+    judge(context, share, warn_above=warn_above, fail_above=fail_above,
+          fail=('Reflections on the glasses. Tilt the glasses or change the lighting.', 8),
+          warn=('Possible reflections on the glasses.', 5))
 
 
 def _siglip_score(context: ValidationContext, question: str, measurement: str) -> float:
@@ -224,9 +212,8 @@ def check_glasses_glare_siglip(context: ValidationContext, min_glasses_share: fl
     score = _siglip_score(context, 'glare', 'siglip_glare_score')
     if _glasses(context)[3] < min_glasses_share:
         return
-    if score > warn_above:
-        context.issues.append(ValidationIssue(
-            category='error' if score > fail_above else 'warning', message='There may be reflections on the glasses.', severity=5))
+    finding = ('There may be reflections on the glasses.', 5)
+    judge(context, score, warn_above=warn_above, fail_above=fail_above, fail=finding, warn=finding)
 
 
 def check_gaze_siglip(context: ValidationContext, warn_above: float, fail_above: float = math.inf):
@@ -239,6 +226,5 @@ def check_gaze_siglip(context: ValidationContext, warn_above: float, fail_above:
     :param fail_above: Score above which it fails; off by default.
     """
     score = _siglip_score(context, 'gaze_aside', 'siglip_gaze_score')
-    if score > warn_above:
-        context.issues.append(ValidationIssue(
-            category='error' if score > fail_above else 'warning', message='The eyes may not be looking into the camera.', severity=5))
+    finding = ('The eyes may not be looking into the camera.', 5)
+    judge(context, score, warn_above=warn_above, fail_above=fail_above, fail=finding, warn=finding)

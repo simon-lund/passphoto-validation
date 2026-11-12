@@ -8,7 +8,8 @@ OFIQ's natural colour on the skin and here by a tint the background and the whit
 import cv2
 import numpy as np
 
-from ..models import CheckSkipped, ValidationIssue, ValidationContext
+from ..levels import judge
+from ..models import CheckSkipped, ValidationContext
 from ..utils import mesh_points
 from .eyes import MP_LEFT_EYE, MP_RIGHT_EYE
 
@@ -30,12 +31,9 @@ def check_exposure_level(context: ValidationContext, warn_below: float, fail_bel
     highlights = float(np.percentile(lightness, 99))
     context.measurements['highlight_lightness'] = highlights
 
-    if highlights < fail_below:
-        context.issues.append(ValidationIssue(
-            category='error', message='Photo is too dark (underexposed). Increase the lighting.', severity=8))
-    elif highlights < warn_below:
-        context.issues.append(ValidationIssue(
-            category='warning', message='Photo may be too dark. Check the lighting.', severity=5))
+    judge(context, highlights, warn_below=warn_below, fail_below=fail_below,
+          fail=('Photo is too dark (underexposed). Increase the lighting.', 8),
+          warn=('Photo may be too dark. Check the lighting.', 5))
 
 
 def check_contrast(context: ValidationContext, warn_below: float = 40.0, fail_below: float = 30.0):
@@ -49,18 +47,9 @@ def check_contrast(context: ValidationContext, warn_below: float = 40.0, fail_be
     contrast = gray.std()
     context.measurements['contrast'] = float(contrast)
 
-    if contrast < fail_below:
-        context.issues.append(ValidationIssue(
-            category='error',
-            message=f'Contrast is far too low (grey-level spread {contrast:.0f}). The photo looks grey.',
-            severity=7
-        ))
-    elif contrast < warn_below:
-        context.issues.append(ValidationIssue(
-            category='warning',
-            message=f'Low contrast (grey-level spread {contrast:.0f}). Image may appear washed out.',
-            severity=5
-        ))
+    judge(context, contrast, warn_below=warn_below, fail_below=fail_below,
+          fail=(f'Contrast is far too low (grey-level spread {contrast:.0f}). The photo looks grey.', 7),
+          warn=(f'Low contrast (grey-level spread {contrast:.0f}). Image may appear washed out.', 5))
 
 
 def eye_whites(context: ValidationContext, points: np.ndarray) -> np.ndarray:
@@ -127,15 +116,8 @@ def check_colour_cast(context: ValidationContext, warn_above: float, fail_above:
     cast = max(agreement, 0.0) * float(min(chroma))
     context.measurements['colour_cast'] = cast
 
-    if cast > fail_above:
-        context.issues.append(ValidationIssue(
-            category='error',
-            message=f'The photo has a colour cast: the background and the whites of the eyes are tinted the '
-                    f'same way (shared chroma {cast:.0f}). Colours must be natural.',
-            severity=7))
-    elif cast > warn_above:
-        context.issues.append(ValidationIssue(
-            category='warning',
-            message=f'The photo may have a colour cast: the background and the whites of the eyes share a '
-                    f'tint (shared chroma {cast:.0f}).',
-            severity=4))
+    judge(context, cast, warn_above=warn_above, fail_above=fail_above,
+          fail=(f'The photo has a colour cast: the background and the whites of the eyes are tinted the '
+                f'same way (shared chroma {cast:.0f}). Colours must be natural.', 7),
+          warn=(f'The photo may have a colour cast: the background and the whites of the eyes share a '
+                f'tint (shared chroma {cast:.0f}).', 4))

@@ -15,7 +15,7 @@ from .crop import FRAMING_CHECKS, plan_crop
 from .models import CheckResult, CheckSkipped, Crop, PassportPhotoReport, ValidationIssue, ValidationContext
 from .ofiq import PARSING_LABELS, load_engine
 from .rules import evaluate_problems, evaluate_rules
-from .thresholds import apply_overrides, disabled_in, is_off, load_overrides, parameters, thresholds
+from .thresholds import apply_overrides, disabled_in, is_off, level_is_off, load_overrides, parameters, thresholds
 
 logger = logging.getLogger(__name__)
 
@@ -214,9 +214,17 @@ class PassportPhotoValidator:
 
     def parameters(self) -> Dict[str, Dict]:
         """Every parameter of every check with the value this validator runs with, by check name, and whether
-        the check is enabled. A level that is off reads False, as in the thresholds file."""
+        the check is enabled. A level that is off reads False, as in the thresholds file; the open end of a
+        range reads None (JSON has no infinity)."""
+        def shown(name, key, value):
+            if level_is_off(name, key, value):
+                return False
+            if isinstance(value, (tuple, list)):
+                return [None if is_off(v) else v for v in value]
+            return None if is_off(value) else value
+
         return {name: dict(enabled=name not in self.disabled,
-                           **{key: (False if is_off(value) else value) for key, value in parameters(check, kwargs).items()})
+                           **{key: shown(name, key, value) for key, value in parameters(check, kwargs).items()})
                 for name, check, kwargs in self._all_checks}
 
     @staticmethod

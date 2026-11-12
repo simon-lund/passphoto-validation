@@ -112,7 +112,9 @@ fail_share_above = false
 enabled = false
 ```
 
-The API reads the same file from `THRESHOLDS_FILE` (or `.env`) and lists what it runs with at `/v1/thresholds`. A file that names a check or a parameter that does not exist, or gives a wrong type, stops the command or the server with a message, so a typo never silently keeps the default. The file is applied last, so its `[resolution]` values win over `MIN_RES_WIDTH` and the other resolution settings of the environment.
+Without `--thresholds`, the CLI, the API and the review page all read the file `THRESHOLDS_FILE` names (in the environment or in `.env`); the CLI prints which file it runs with, and the API lists the values at `/v1/thresholds`. A file that names a check or a parameter that does not exist, or gives a wrong type or a list of the wrong length, stops the command or the server with a message, so a typo never silently keeps the default. A parameter that was renamed keeps answering to its old name, so a file written earlier still loads. The file is applied last, so its `[resolution]` values win over `MIN_RES_WIDTH` and the other resolution settings of the environment.
+
+A few levels carry older names: `min_res` and `recommended_res` of `resolution`, `tolerance` of `photo_format`, `vertical_range` of `face_centered`. `false` turns those off the same way. One function grades every check (`core/levels.py`): the fail level holds whether or not the warn level is on, and a message never names a level that is off.
 
 ## Evaluation data
 

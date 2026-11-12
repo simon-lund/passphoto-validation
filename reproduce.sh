@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# From a clone to the evaluation numbers the docs claim, in one run. Safe to run again: every step skips
-# what is already there.
+# From a clone to the evaluation numbers the docs claim, in one run. Safe to run again: the install, the
+# London download and the evaluation set are kept when they are there. The pipeline runs again every time
+# (about 17 minutes), because its results depend on the code and the thresholds as they are now.
 #
 #   ./reproduce.sh                   install, the London Set, the evaluation set, the pipeline's results, the report
 #   ./reproduce.sh --with-openimages also the 240 real photos from Open Images (needs Google's metadata; see the script)
@@ -19,7 +20,7 @@ for arg in "$@"; do
     --with-openimages) WITH_OPENIMAGES=1 ;;
     --with-baseline) WITH_BASELINE=1 ;;
     --skip-install) SKIP_INSTALL=1 ;;
-    -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "reproduce.sh: unknown option $arg (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -31,8 +32,11 @@ if [ "$SKIP_INSTALL" = 0 ]; then
   say "Install (./install.sh)"
   ./install.sh
 fi
-OFIQ_DIR="$(grep '^OFIQ_CONFIG_DIR=' .env | cut -d= -f2-)"
-[ -n "$OFIQ_DIR" ] || { echo "reproduce.sh: .env has no OFIQ_CONFIG_DIR; run ./install.sh first" >&2; exit 1; }
+# OFIQ's data folder: from the environment, else from .env. `|| true`: without a match grep fails, and under
+# `set -e` the script would end here without a word
+OFIQ_DIR="${OFIQ_CONFIG_DIR:-$(grep -s '^OFIQ_CONFIG_DIR=' .env | cut -d= -f2- || true)}"
+[ -n "$OFIQ_DIR" ] || { echo "reproduce.sh: no OFIQ_CONFIG_DIR in the environment or in .env; run ./install.sh first (without --skip-install)" >&2; exit 1; }
+[ -f "$OFIQ_DIR/ofiq_config.jaxn" ] || { echo "reproduce.sh: $OFIQ_DIR has no ofiq_config.jaxn; run ./install.sh first (without --skip-install)" >&2; exit 1; }
 # Several workers need OFIQ limited to 3 threads each, or they starve one another
 export OFIQ_CONFIG_FILE=ofiq_config_eval.jaxn
 [ -f "$OFIQ_DIR/ofiq_config_eval.jaxn" ] || sed 's/"ort_intra_threads": 0/"ort_intra_threads": 3/' "$OFIQ_DIR/ofiq_config.jaxn" > "$OFIQ_DIR/ofiq_config_eval.jaxn"

@@ -13,16 +13,21 @@ with its reason and the rules it decided, so one defect reads as one problem how
 
 Keys: Y or the right arrow when the verdict is right, N or the left arrow when it is wrong, C to write a
 comment first, a click on a rule's chip to mark that rule's status as wrong, S to skip, B to go back. On a touch
-screen, swipe right or left. Each answer is appended to reviews.jsonl next to the set: the file, the answer,
+screen, swipe right or left. A held key acts once, and an answer counts only once the photo has been on screen
+for a moment, so no photo is answered unseen. Each answer is appended to reviews.jsonl next to the set: the file, the answer,
 the rules marked wrong, the comment, the verdict as shown, and the pipeline's git commit and thresholds file.
 Photos already answered are left out on the next run (--again keeps them). --summary prints what the answers
 say per rule and per variant, which is what the thresholds are tuned on.
 
 The verdicts are computed live, a few photos ahead of the one on screen; --thresholds applies a thresholds
-file (see `passport-validator thresholds`). The filters --split, --variant, --check NAME=STATUS and
+file (see `passport-validator thresholds`), and without it the file THRESHOLDS_FILE names, as for the CLI
+and the API. The filters --split, --variant, --check NAME=STATUS and
 --rule ID=STATUS read the set's manifest.csv and results.jsonl, so a run can show only, say, the photos
 where colour_cast warned. The photos never leave this machine: the server listens on 127.0.0.1 and writes
 nothing but reviews.jsonl.
+
+Every error answer is `{"code": "<stable_snake_case>", "detail": "<human text>"}`, as in check_api.py; the
+page branches on the status and the code only.
 """
 import argparse
 import base64
@@ -41,10 +46,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from PIL import Image
 
+from passphoto_validation.check_api import ApiError, handle_api_error, handle_validation_error
 from passphoto_validation.core import PassportPhotoValidator, ValidatorConfig
 from passphoto_validation.core.checks.eyes import MP_LEFT_EYE, MP_RIGHT_EYE
 from passphoto_validation.core.checks.lighting import LEFT_EYE_CONTOUR, RIGHT_EYE_CONTOUR, eye_whites
@@ -219,24 +226,39 @@ def verdict(report) -> dict:
 
 
 class Computer(threading.Thread):
-    """Runs the validator on the photos around the one on screen, in one thread (MediaPipe is not thread-safe)."""
+    """Runs the validator on the photos around the one on screen, in one thread (MediaPipe is not thread-safe).
+
+    The page asks for one photo at a time and numbers its requests. Only the newest request moves the window
+    the thread works on; a request that a newer one has replaced answers SUPERSEDED at once instead of
+    waiting for a photo that is no longer computed (it would hold a server thread until the timeout, and a
+    request arriving late would pull the window back from the photo on screen).
+    """
+    SUPERSEDED, TIMED_OUT = 'superseded', 'timed_out'
 
     def __init__(self, validator: PassportPhotoValidator, folder: Path, items: list, crop: bool):
         super().__init__(daemon=True)
         self.validator, self.folder, self.items, self.crop = validator, folder, items, crop
         self.cache = {}
         self.wanted = 0
+        self.newest = 0  # the highest request number seen
         self.condition = threading.Condition()
 
-    def get(self, i: int, timeout: float = 300):
+    def get(self, i: int, request: int = None, timeout: float = 300):
+        """The result for photo `i`, or SUPERSEDED / TIMED_OUT. `request` is the page's running number of
+        the request; without one the call counts as the newest."""
         with self.condition:
-            self.wanted = i
-            self.condition.notify_all()
+            if request is None:
+                request = self.newest + 1
+            if request >= self.newest:
+                self.newest, self.wanted = request, i
+                self.condition.notify_all()
             deadline = time.monotonic() + timeout
             while i not in self.cache:
+                if request < self.newest:
+                    return self.SUPERSEDED
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    return None
+                    return self.TIMED_OUT
                 self.condition.wait(remaining)
             return self.cache[i]
 
@@ -249,7 +271,10 @@ class Computer(threading.Thread):
                     if todo is not None:
                         break
                     self.condition.wait()
-            result = self.compute(todo)
+            try:
+                result = self.compute(todo)
+            except Exception as exc:  # never let one photo end the thread: every later request would time out
+                result = dict(i=todo, file=self.items[todo]['file'], error=f'{type(exc).__name__}: {exc}')
             with self.condition:
                 self.cache[todo] = result
                 for j in list(self.cache):
@@ -263,10 +288,11 @@ class Computer(threading.Thread):
         try:
             image = prepare_image(Image.open(self.folder / item['file']))
             report, context = self.validator.inspect(image, crop=self.crop)
+            return dict(i=i, file=item['file'], error=None, width=context.width, height=context.height,
+                        seconds=round(time.monotonic() - started, 1), verdict=verdict(report),
+                        overlays=overlays(context, report))
         except Exception as exc:  # shown on the card, the queue goes on
             return dict(i=i, file=item['file'], error=f'{type(exc).__name__}: {exc}')
-        return dict(i=i, file=item['file'], error=None, width=context.width, height=context.height,
-                    seconds=round(time.monotonic() - started, 1), verdict=verdict(report), overlays=overlays(context, report))
 
 
 # --- Answers
@@ -319,10 +345,27 @@ def summary(folder: Path):
 
 # --- The server
 
+async def handle_crash(request: Request, exc: Exception):
+    # A bug in this server. Starlette re-raises it after this answer, so the traceback is in the server's log
+    return JSONResponse(status_code=500, content={
+        'code': 'internal_error', 'detail': 'The review server hit an error; the traceback is in its log.'})
+
+
 def make_app(args, items, reviewed, computer, config):
     app = FastAPI(title='passphoto-validation review', docs_url=None, redoc_url=None)
-    counts = Counter(('right' if r['agree'] else 'wrong') for r in reviewed.values())
+    # The same error answers as the check API: a stable code next to the text
+    app.add_exception_handler(ApiError, handle_api_error)
+    app.add_exception_handler(RequestValidationError, handle_validation_error)
+    app.add_exception_handler(Exception, handle_crash)
+    # The last answer per photo counts, so answering a photo again (after B) moves its count and adds none
+    answers = {file: record['agree'] for file, record in reviewed.items()}
     commit = git_commit()
+
+    def counts():
+        return dict(Counter('right' if agree else 'wrong' for agree in answers.values()))
+
+    def no_such_photo(status: int):
+        return ApiError(status, 'photo_not_in_queue', 'No such photo in the queue.')
 
     @app.get('/', response_class=HTMLResponse)
     def page():
@@ -331,42 +374,49 @@ def make_app(args, items, reviewed, computer, config):
     @app.get('/api/queue')
     def queue():
         return dict(set=args.set.name, path=str(args.set), reviews=str(args.set / REVIEWS), items=items,
-                    counts=dict(counts), commit=commit, thresholds_file=config.thresholds_file,
+                    counts=counts(), commit=commit, thresholds_file=config.thresholds_file,
                     filters=dict(split=args.split, variant=args.variant, check=args.check or [], rule=args.rule or [],
                                  shuffle=args.shuffle, again=args.again))
 
     @app.get('/api/item/{i}')
-    def item(i: int):
+    def item(i: int, request: int = None):
         if not 0 <= i < len(items):
-            raise HTTPException(404, 'No such photo in the queue')
-        result = computer.get(i)
-        if result is None:
-            raise HTTPException(504, 'The pipeline did not answer in time')
+            raise no_such_photo(404)
+        result = computer.get(i, request)
+        if result == Computer.SUPERSEDED:
+            raise ApiError(409, 'superseded', 'A later request for another photo replaced this one.')
+        if result == Computer.TIMED_OUT:
+            raise ApiError(504, 'pipeline_timeout', 'The pipeline did not answer in time.')
         return result
 
     @app.get('/api/photo/{i}')
     def photo(i: int):
         if not 0 <= i < len(items):
-            raise HTTPException(404, 'No such photo in the queue')
+            raise no_such_photo(404)
         return FileResponse(args.set / items[i]['file'])
 
     @app.post('/api/review')
     def review(answer: dict):
         i = answer.get('i')
-        if not isinstance(i, int) or not 0 <= i < len(items):
-            raise HTTPException(400, 'No such photo in the queue')
+        if not isinstance(i, int) or isinstance(i, bool) or not 0 <= i < len(items):
+            raise no_such_photo(400)
         item = items[i]
+        if not isinstance(answer.get('agree'), bool):
+            raise ApiError(400, 'answer_missing', 'The answer needs "agree": true or false.')
         record = dict(
             file=item['file'], set=args.set.name, time=datetime.now(timezone.utc).isoformat(timespec='seconds'),
-            agree=bool(answer.get('agree')), wrong_rules=[str(r) for r in answer.get('wrong_rules') or []],
+            agree=answer['agree'], wrong_rules=[str(r) for r in answer.get('wrong_rules') or []],
             comment=str(answer.get('comment') or '').strip(), verdict=answer.get('verdict') or {},
             variant=item['variant'], broken_rule=item['broken_rule'], commit=commit, thresholds_file=config.thresholds_file,
         )
-        with open(args.set / REVIEWS, 'a', encoding='utf-8') as f:
-            f.write(json.dumps(record, ensure_ascii=False) + '\n')
-        counts['right' if record['agree'] else 'wrong'] += 1
+        try:
+            with open(args.set / REVIEWS, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(record, ensure_ascii=False) + '\n')
+        except OSError as exc:
+            raise ApiError(500, 'review_not_saved', f'Could not write {args.set / REVIEWS}: {exc}')
+        answers[item['file']] = record['agree']
         item['reviewed'] = record['agree']
-        return dict(counts=dict(counts))
+        return dict(counts=counts())
 
     return app
 
@@ -384,7 +434,8 @@ def main():
     parser.add_argument('--limit', type=int, help='At most this many photos')
     parser.add_argument('--again', action='store_true', help='Include photos already answered')
     parser.add_argument('--no-crop', action='store_true', help='Skip planning the 35x45 crop (faster)')
-    parser.add_argument('--thresholds', type=Path, help='A thresholds file to run with (passport-validator thresholds)')
+    parser.add_argument('--thresholds', type=Path,
+                        help='A thresholds file to run with (passport-validator thresholds); without it, the one THRESHOLDS_FILE names')
     parser.add_argument('--summary', action='store_true', help='Print what the answers so far say, and exit')
     args = parser.parse_args()
     if not args.set.is_dir():
@@ -396,11 +447,14 @@ def main():
     items, reviewed = build_queue(args)
     if not items:
         sys.exit(f'Nothing to review: every matching photo in {args.set} has an answer (--again shows them again)')
-    config = ValidatorConfig(thresholds_file=str(args.thresholds) if args.thresholds else None)
+    # Without --thresholds the field is left out, so THRESHOLDS_FILE (or .env) decides, as for the CLI and the API
+    config = ValidatorConfig(thresholds_file=str(args.thresholds)) if args.thresholds else ValidatorConfig()
     try:
         validator = PassportPhotoValidator(config)
     except ThresholdsFileError as exc:
         sys.exit(str(exc))
+    if config.thresholds_file:
+        print(f'Thresholds file: {config.thresholds_file}', file=sys.stderr)
     if validator.ofiq is None:
         print(f'OFIQ is not loaded ({validator.ofiq_unavailable}); the OFIQ rules will show as skipped', file=sys.stderr)
     computer = Computer(validator, args.set, items, crop=not args.no_crop)

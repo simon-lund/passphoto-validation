@@ -30,14 +30,16 @@ uv run passport-validator thresholds > thresholds.toml   # every parameter of ev
 uv run python scripts/review.py --set data/london-eval --split test --shuffle   # judge verdicts photo by photo
 ```
 
-`uv run --inexact` keeps the OFIQ wheel; a plain `uv sync` removes it. Scripts take `--set data/london-eval` and the like; the notebooks default to the same folders. Several evaluation workers need `OFIQ_CONFIG_FILE=ofiq_config_eval.jaxn` (3 ORT threads) or they starve one another.
+`uv run --inexact` keeps the OFIQ wheel; a plain `uv sync` removes it. Scripts take `--set data/london-eval` and the like; the notebooks default to the same folders. With several workers `scripts/run_eval.py` runs OFIQ with `ofiq_config_eval.jaxn` (3 threads per worker, written by `install.sh`) unless `OFIQ_CONFIG_FILE` names another file; without the limit the workers starve one another. It always writes to `--out` from scratch, so give a new file name to keep the old results. `THRESHOLDS_FILE` (environment or `.env`) is read by the CLI, the API and the review page alike.
 
 ## Rules that hold
 
 - The London Set photos, and everything made from them (crops, variants, per-photo results, screenshots of them), never enter git and never leave `data/`. Open Images photos are CC BY and may be looked at; the London ones only for the study itself.
 - Check names, rule ids and the keys of the report are contracts: add, never rename. `tests/test_check_api.py` and `tests/test_thresholds.py` pin them.
 - A new threshold goes into `core/thresholds.py` with a note on where the number came from, the snapshot in `tests/test_thresholds.py` is updated on purpose, and `notebooks/evaluation.ipynb` is re-run. Thresholds are chosen on the odd-numbered London people (calibrate) and reported on the even-numbered ones (test).
-- A new check gets both levels (`warn_…`, `fail_…`), is registered in `PassportPhotoValidator.registered_checks`, mapped in `core/rules.py`, and gets a panel in the evaluation notebook.
+- A new check gets both levels (`warn_…`, `fail_…`), grades its measurement with `judge` from `core/levels.py` (never with its own `if value > fail_above`), is registered in `PassportPhotoValidator.registered_checks`, mapped in `core/rules.py`, and gets a panel in the evaluation notebook.
+- A change to the checks must leave the verdicts alone unless it means to move them: run `scripts/run_eval.py --out <new file>` and compare statuses, reasons, rules and problems with `data/london-eval/results.jsonl`.
+- Every error answer of a server (the check API, the review page's server) is `{"code": "<stable_snake_case>", "detail": "<text>"}`, raised as `ApiError` (`check_api.py`).
 - No third-party API inside the pipeline. The baseline in `baseline/` is the one place a photo may be sent out, and only the London Set for the study.
 - No attribution lines in commits. Commit messages say what changed and why, in prose.
 - Work goes straight onto `main`; nothing is deployed, renamed or published without the owner's word.

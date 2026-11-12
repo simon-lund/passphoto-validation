@@ -2,7 +2,8 @@
 import cv2
 import numpy as np
 
-from ..models import CheckSkipped, ValidationIssue, ValidationContext
+from ..levels import judge
+from ..models import CheckSkipped, ValidationContext
 
 def check_glasses(context: ValidationContext, bright_level: int = 240, warn_above: float = 0.02, fail_above: float = 0.05):
     """Check for glare (bright reflections) in the upper half of the face, e.g. on glasses.
@@ -32,15 +33,6 @@ def check_glasses(context: ValidationContext, bright_level: int = 240, warn_abov
 
     context.measurements['eye_reflection_ratio'] = float(bright_pixel_ratio)
 
-    if bright_pixel_ratio > fail_above:
-        context.issues.append(ValidationIssue(
-            category='error',
-            message='Glare or reflections detected on glasses. Adjust angle or remove glasses.',
-            severity=8
-        ))
-    elif bright_pixel_ratio > warn_above:
-        context.issues.append(ValidationIssue(
-            category='warning',
-            message='Possible reflections on glasses detected.',
-            severity=5
-        ))
+    judge(context, bright_pixel_ratio, warn_above=warn_above, fail_above=fail_above,
+          fail=('Glare or reflections detected on glasses. Adjust angle or remove glasses.', 8),
+          warn=('Possible reflections on glasses detected.', 5))

@@ -5,6 +5,10 @@
 For each label, the photos where it says there is a problem are positives, the rest negatives. A check
 counts as flagging a photo when it warns or fails. hit = flagged positives, false_alarm = flagged
 negatives, not_run = skipped or error. Photos labelled face_judgeable=false are left out.
+
+A check that depends on another (validator.CHECK_DEPENDENCIES) is not run once that one has failed, and
+shows as not_run on those photos. Where two checks judge the same defect they are scored together as one
+row, `a+b`: flagged when either flags, run when either ran.
 """
 import argparse
 import json
@@ -12,9 +16,11 @@ from pathlib import Path
 
 import pandas as pd
 
-# (label, value that means a problem, check, which photos to score it on)
+# (label, value that means a problem, check or checks scored together, which photos to score it on)
 PAIRS = [
-    ('glasses', 'tinted', 'glasses_tint', 'all'),
+    # Tinted lenses fail ofiq_eyes_visible, and glasses_tint is not run once that has failed, so on its own it
+    # would be scored only on the tinted glasses the first check let through
+    ('glasses', 'tinted', ('ofiq_eyes_visible', 'glasses_tint'), 'all'),
     ('glasses', 'tinted', 'ofiq_eyes_visible', 'all'),
     ('glasses_glare', True, 'glasses_glare', 'with_glasses'),
     ('glasses_glare', True, 'glasses_glare', 'clear_glasses'),
@@ -56,6 +62,13 @@ def _problem(frame: pd.DataFrame, label: str, value) -> pd.Series:
     return frame[label] == value
 
 
+def _together(frame: pd.DataFrame, checks) -> pd.DataFrame:
+    """One row per photo for several checks scored as one: the worst status among those that ran."""
+    rows = frame[frame['check'].isin(checks)]
+    rank = rows['status'].map({'fail': 0, 'warn': 1, 'pass': 2}).fillna(3)  # a check that did not run comes last
+    return rows.assign(rank=rank).sort_values('rank', kind='stable').drop_duplicates('file').drop(columns='rank')
+
+
 def score(frame: pd.DataFrame) -> pd.DataFrame:
     frame = frame[frame['face_judgeable'] != False]  # noqa: E712 - missing means judgeable
     subsets = {
@@ -66,7 +79,10 @@ def score(frame: pd.DataFrame) -> pd.DataFrame:
     }
     out = []
     for label, value, check, subset in PAIRS:
-        rows = subsets[subset](frame[frame['check'] == check])
+        if isinstance(check, tuple):
+            rows, check = subsets[subset](_together(frame, check)), '+'.join(check)
+        else:
+            rows = subsets[subset](frame[frame['check'] == check])
         if rows.empty:
             continue
         problem = _problem(rows, label, value)

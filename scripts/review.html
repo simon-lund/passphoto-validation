@@ -212,7 +212,31 @@
     for (const layer of LAYERS) layerState[layer.id] = layer.id in saved ? !!saved[layer.id] : layer.on;
   } catch (e) { for (const layer of LAYERS) layerState[layer.id] = layer.on; }
 
-  const state = { queue: null, i: 0, item: null, image: null, parsingImage: null, wrong: new Set(), history: [], counts: { right: 0, wrong: 0 } };
+  const state = { queue: null, i: 0, item: null, image: null, parsingImage: null, wrong: new Set(), history: [], counts: { right: 0, wrong: 0 },
+                  request: 0, shownAt: 0, saving: false };
+  // An answer counts only once the photo has been on screen this long: a second press of the same key, or a
+  // key held down, lands on the next photo before anyone has looked at it
+  const MIN_LOOK_MS = 300;
+
+  // The server answers errors as { code, detail }. The page branches on the code and words the message itself;
+  // an unknown code falls back to the server's text
+  const ERRORS = {
+    photo_not_in_queue: 'This photo is not in the queue any more. Reload the page.',
+    pipeline_timeout: 'The pipeline did not answer in time.',
+    answer_missing: 'The answer was not sent completely.',
+    review_not_saved: 'The answer could not be written to reviews.jsonl.',
+    invalid_request: 'The server did not understand the request.',
+    internal_error: 'The review server hit an error; its log has the traceback.',
+  };
+  async function api(url, options) {
+    const r = await fetch(url, options);
+    let body = null;
+    try { body = await r.json(); } catch (e) { /* not JSON: an error page from something in between */ }
+    if (r.ok) return body;
+    const error = new Error((body && ERRORS[body.code]) || (body && body.detail) || r.statusText || `HTTP ${r.status}`);
+    error.code = body && body.code;
+    throw error;
+  }
 
   // --- Layers bar
   const layersBox = $('layers');
@@ -312,21 +336,32 @@
     showMessage(`Computing ${entry.file} …`);
     $('stamp').dataset.status = 'pass'; $('stamp-text').textContent = '…'; $('stamp-sub').textContent = '';
     $('rules').innerHTML = ''; $('checks-table').innerHTML = ''; $('meta').textContent = entry.file;
+    // Requests are numbered so the server can tell the newest from one that arrives late; the number keeps
+    // rising across reloads
+    const request = state.request = Math.max(Date.now(), state.request + 1);
     let item;
     try {
-      const r = await fetch(`/api/item/${i}`);
-      item = await r.json();
-      if (!r.ok) throw new Error(item.detail || r.statusText);
-    } catch (e) { item = { i, file: entry.file, error: String(e) }; }
+      item = await api(`/api/item/${i}?request=${request}`);
+    } catch (e) {
+      if (e.code === 'superseded') {
+        // A later request replaced this one. Mostly it is this page's own (the user moved on), and that one
+        // draws the card. If this was the page's newest request, the later one came from another window on
+        // the same server; asking again would only make the two windows replace each other in turns
+        if (state.request === request) showMessage('Another window of this review page took over. Reload this one to go on here.');
+        return;
+      }
+      item = { i, file: entry.file, error: e.message, failed: true };
+    }
     if (state.i !== i) return;  // the user moved on
     state.item = item;
     if (item.error) {
-      showMessage(`The pipeline crashed on ${entry.file}: ${item.error}. Skip it (S) or go back (B).`);
-      $('stamp').dataset.status = 'fail'; $('stamp-text').textContent = 'crashed';
+      showMessage(item.failed ? `Could not load ${entry.file}: ${item.error} Skip it (S) or go back (B).`
+                              : `The pipeline crashed on ${entry.file}: ${item.error}. Skip it (S) or go back (B).`);
+      $('stamp').dataset.status = 'fail'; $('stamp-text').textContent = item.failed ? 'not loaded' : 'crashed';
       return;
     }
     const image = new Image();
-    image.onload = () => { if (state.i !== i) return; state.image = image; hideMessage(); draw(); };
+    image.onload = () => { if (state.i !== i) return; state.image = image; state.shownAt = performance.now(); hideMessage(); draw(); };
     image.src = `/api/photo/${i}`;
     if (item.overlays && item.overlays.parsing) {
       const parsing = new Image();
@@ -393,9 +428,13 @@
       box.querySelectorAll(`.chip[data-rule="${CSS.escape(id)}"]`).forEach((c) => c.setAttribute('aria-pressed', String(on)));
       status(state.wrong.size ? `${state.wrong.size} rule(s) marked wrong.` : '');
     }));
+    // Rules whose checks are turned off never block validity, so the line says how many were left out
     const passes = v.rules.filter((r) => r.status === 'pass').length;
+    const unchecked = v.rules.filter((r) => r.status === 'not_checked').length;
+    const leftOut = unchecked ? ` ${unchecked} rules were not checked (their checks are turned off).` : '';
     const none = document.createElement('div'); none.className = 'none small muted';
-    none.textContent = v.problems.length ? `${passes} rules pass.` : `Every rule passes (${passes}).`;
+    none.textContent = (v.problems.length ? `${passes} rules pass.`
+      : unchecked ? `No problems in the ${passes} rules that were checked.` : `Every rule passes (${passes}).`) + leftOut;
     box.appendChild(none);
 
     const table = $('checks-table');
@@ -409,7 +448,9 @@
 
   // --- Answers
   async function decide(agree) {
-    if (!state.item || state.item.error) return;
+    // Only for a photo that is on screen and has been looked at, and one answer at a time
+    if (!state.item || state.item.error || !state.image || state.saving) return;
+    if (performance.now() - state.shownAt < MIN_LOOK_MS) return;
     const v = state.item.verdict;
     const body = {
       i: state.i, file: state.item.file, agree, wrong_rules: [...state.wrong], comment: $('comment').value,
@@ -420,12 +461,12 @@
         skipped: v.skipped_rules,
       },
     };
+    state.saving = true;
     try {
-      const r = await fetch('/api/review', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      const answer = await r.json();
-      if (!r.ok) throw new Error(answer.detail || r.statusText);
+      const answer = await api('/api/review', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       state.counts = answer.counts;
-    } catch (e) { status(`Could not save the answer: ${e}`); return; }
+    } catch (e) { status(`Could not save the answer: ${e.message}`); return; }
+    finally { state.saving = false; }
     state.history.push(state.i);
     status(`${agree ? '✓ right' : '✗ wrong'} saved for ${state.item.file}.`);
     show(state.i + 1);
@@ -447,6 +488,9 @@
     if (inField) { if (e.key === 'Escape') { e.target.blur(); } return; }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const k = e.key;
+    // A held key acts once: no answers on photos nobody saw, no burst of requests from a held S
+    const paging = ['y', 'Y', 'n', 'N', 's', 'S', 'b', 'B', 'c', 'C', 'ArrowRight', 'ArrowLeft'].includes(k);
+    if (e.repeat && (paging || (k >= '1' && k <= '9'))) { if (paging) e.preventDefault(); return; }
     if (k === 'y' || k === 'Y' || k === 'ArrowRight') { e.preventDefault(); decide(true); }
     else if (k === 'n' || k === 'N' || k === 'ArrowLeft') { e.preventDefault(); decide(false); }
     else if (k === 's' || k === 'S') { e.preventDefault(); skip(); }
@@ -469,9 +513,8 @@
   // --- Start
   (async () => {
     try {
-      const r = await fetch('/api/queue');
-      state.queue = await r.json();
-    } catch (e) { showMessage(`Could not load the queue: ${e}`); return; }
+      state.queue = await api('/api/queue');
+    } catch (e) { showMessage(`Could not load the queue: ${e.message}`); return; }
     state.counts = state.queue.counts || {};
     const f = state.queue.filters;
     const filters = [f.split && `split ${f.split}`, f.variant && `variant ${f.variant}`, ...(f.check || []), ...(f.rule || []), f.shuffle && 'shuffled']
