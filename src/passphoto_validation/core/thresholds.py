@@ -108,17 +108,17 @@ THRESHOLDS: Dict[str, Thresholds] = {
     # Eyes
     'gaze': Thresholds(
         dict(warn_above=0.08, fail_above=0.15),
-        'Iris offset as a share of the eye width, both eyes averaged; real averted gaze on Open Images: 59% caught, 18% false'),
+        'Iris offset as a share of the eye width, both eyes averaged; real averted gaze on Open Images: 57% caught, 18% false'),
     'red_eyes': Thresholds(
         dict(fail_above=0.3),
         'Red share of the pupil relative to the skin; the red-eye variant fails, a warm colour cast passes'),
     'glasses_tint': Thresholds(
         dict(min_glasses_share=0.03, warn_below=0.55, fail_below=0.45),
         'Lightness behind the lens over the cheek below it, when the lenses cover at least 3% of the eye-distance '
-        'area; sunglasses fail, real tinted glasses 92% caught with ofiq_eyes_visible'),
+        'area; sunglasses fail, real tinted glasses 94% caught with ofiq_eyes_visible'),
     'glasses_glare': Thresholds(
         dict(min_glasses_share=0.03, warn_above=0.01, fail_above=0.04),
-        'Share of blown-out white pixels inside the lenses; drawn glare 96% caught, real reflections 10%'),
+        'Share of blown-out white pixels inside the lenses; drawn glare 96% caught, real reflections 12%'),
     # Second opinions, warn only. SigLIP SO400M: the score 80% of fine photos stay under, on the calibrate half of
     # the Open Images set (notebooks/real_photos.ipynb)
     'siglip_glasses_glare': Thresholds(
@@ -129,6 +129,7 @@ THRESHOLDS: Dict[str, Thresholds] = {
         'SigLIP\'s "eyes looking away" against "into the camera"; 80% of real averted gaze caught, 28% false'),
 
     # --- OFIQ (ISO/IEC 29794-5). Pose in degrees; quality measures on OFIQ's 0-100 scale, higher is better.
+    # The rates on real photos in these notes are shares of the photos the check judged (scripts/score_labels.py)
     # Calibrated on the London Set; the eye thresholds also on real photos with glasses, hats and closed eyes from
     # Open Images (scripts/score_labels.py)
     'ofiq_head_yaw': Thresholds(dict(warn_above=5, fail_above=10), '3/4 views: 96-100% caught, 2% false warns'),
@@ -143,10 +144,10 @@ THRESHOLDS: Dict[str, Thresholds] = {
         dict(warn_below=93, fail_below=90),
         'The London Set\'s closed mouths never score below 94; 7 in 10 real open mouths score below 90'),
     'ofiq_eyes_open': Thresholds(
-        dict(warn_below=95, fail_below=70), 'Real closed eyes: 56% caught (40% fail), 10% false; 80/50 caught only 8%'),
+        dict(warn_below=95, fail_below=70), 'Real closed eyes: 59% caught (41% fail), 10% false; 80/50 caught only 8%'),
     'ofiq_eyes_visible': Thresholds(
         dict(warn_below=60, fail_below=25),
-        'Sunglasses 100%, real tinted glasses 92% with glasses_tint; 90/50 flagged 61% of clear glasses'),
+        'Sunglasses 100%, real tinted glasses 94% with glasses_tint; 90/50 flagged 61% of clear glasses'),
     'ofiq_face_occlusion': Thresholds(dict(warn_below=90, fail_below=70), 'No labelled set; untested'),
     'ofiq_mouth_occlusion': Thresholds(dict(warn_below=90, fail_below=70), 'Untested'),
     'ofiq_head_covering': Thresholds(dict(warn_below=90, fail_below=50), 'Real hats: 90% caught, 8% false'),

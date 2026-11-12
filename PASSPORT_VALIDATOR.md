@@ -268,24 +268,26 @@ The checks they replaced (BRISQUE, the solvePnP head pose, face-brightness expos
 
 The set comes from one studio, and most defects are synthetic, so treat these numbers as an upper bound.
 
-**Real photos with glasses, hats and closed eyes** (240 Open Images photos from Flickr, CC BY 2.0, labelled by Claude subagents; built with `scripts/build_openimages_set.py`, scored with `scripts/score_labels.py`). They are candid photos, not ID photos, so pose and gaze vary far more than in a photo booth. Caught means a warning or a fail:
+**Real photos with glasses, hats and closed eyes** (240 Open Images photos from Flickr, CC BY 2.0, labelled by Claude subagents; built with `scripts/build_openimages_set.py`). They are candid photos, not ID photos, so pose and gaze vary far more than in a photo booth.
 
-| Problem | Checks | Caught | False alarms |
-| --- | --- | --- | --- |
-| Hat or cap | `ofiq_head_covering` | 90% | 8% |
-| Sunglasses or tinted glasses | `glasses_tint`, `ofiq_eyes_visible` | 92% | 19% of clear glasses, 1% without glasses |
-| Reflections on glasses | `glasses_glare` | 10% | 5% |
-| Closed eyes | `ofiq_eyes_open` | 56% (40% fail) | 10% (1% fail) |
-| Eyes looking away | `gaze` | 59% | 18% |
-| Open mouth | `ofiq_mouth_closed` | 84% (67% fail) | 2% (1% fail) |
-| Dark background | `background_brightness` | 97% (all fail) | 2% of light backgrounds (none fail) |
-| Patterned background (rule) | `ofiq_background`, `background_consistency`, `background_pattern` | 80% (68% fail) | 34% of plain backgrounds (25% fail) |
+The table is the output of `uv run --extra test python scripts/score_labels.py --set data/openimages/eval`, last measured on 2026-11-12. Caught means a warning or a fail. Every rate is a share of the photos the check judged; the photos it could not judge are counted apart, in the last column. On 3% of the photos OFIQ finds no face it can assess, and the eye checks are not run once `ofiq_eyes_visible` has failed, which is why reflections are judged on only 58% of the photos with glasses. Closed eyes and gaze are scored on the photos without tinted glasses, reflections on the photos with glasses.
+
+| Problem | Checks | Caught | False alarms | Not judged |
+| --- | --- | --- | --- | --- |
+| Hat or cap | `ofiq_head_covering` | 90% (82% fail) | 8% (3% fail) | 3% |
+| Sunglasses or tinted glasses | `ofiq_eyes_visible`, `glasses_tint` | 94% (all fail) | 20% of clear glasses (8% fail), 1% without glasses | 3% |
+| Reflections on glasses | `glasses_glare` | 12% (6% fail) | 6% (all fail) | 42% |
+| Closed eyes | `ofiq_eyes_open` | 59% (41% fail) | 10% (1% fail) | 5% |
+| Eyes looking away | `gaze` | 57% (33% fail) | 18% (3% fail) | 5% |
+| Open mouth | `ofiq_mouth_closed` | 87% (69% fail) | 2% (1% fail) | 3% |
+| Dark background | `background_brightness` | 100% (all fail) | 1% of light backgrounds (none fail) | 3% |
+| Patterned background (rule) | `ofiq_background`, `background_consistency`, `background_pattern` | 80% (68% fail) | 33% of plain backgrounds (25% fail) | 4% |
 
 The eye thresholds come from this set: `ofiq_eyes_visible` at 90/50 flagged 61% of clear glasses, and `ofiq_eyes_open` at 80/50 failed only 8% of closed eyes. A glasses frame across the eyes now warns in only 15% of cases (13 photos, most borderline). Reflections on glasses are the weak spot: the check only sees blown-out white spots. Red eyes had too few real cases to measure (2).
 
-The background rows use a second set of labels (`vlm_background_labels.jsonl`: plain, patterned or objects, and light, medium or dark). `background_pattern` takes the median colour variance of the background's patches, so a faint pattern spread across it (a flag's emblem) fails, while hair straying into a few patches does not; it skips when fewer than 6 clean patches are visible (a third of these tight crops). Blurred objects behind the person are the weak spot: 39% of them pass `background_no_objects`, against 21% of sharp ones.
+The background rows use a second set of labels (`vlm_background_labels.jsonl`: plain, patterned or objects, and light, medium or dark). `background_pattern` takes the median colour variance of the background's patches, so a faint pattern spread across it (a flag's emblem) fails, while hair straying into a few patches does not; it skips when fewer than 6 clean patches are visible (38% of these tight crops). Blurred objects behind the person are the weak spot: 41% of them pass `background_no_objects`, against 28% of sharp ones.
 
-**With SigLIP enabled** (warn only, thresholds set on the `calibrate` half; `notebooks/real_photos.ipynb`, section 4):
+**With SigLIP enabled** (warn only, thresholds set on the `calibrate` half; `notebooks/real_photos.ipynb`, section 4). These two rows have not been measured again since the eye checks began to stop on covered eyes (2026-11-11); a new measurement needs SigLIP's model.
 
 | Rule, on Open Images | Without SigLIP | With SigLIP |
 | --- | --- | --- |
