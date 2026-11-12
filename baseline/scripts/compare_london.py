@@ -112,3 +112,21 @@ fb = good.groupby('rule')['base'].apply(lambda s: s.isin(FLAG).mean()).sort_valu
 fp = good.groupby('rule')['pipe'].apply(lambda s: s.isin(FLAG).mean()).sort_values(ascending=False).head(10)
 print(pd.DataFrame({'baseline': fb}).to_string(float_format=pct))
 print(pd.DataFrame({'pipeline': fp}).to_string(float_format=pct))
+
+# F. the headline numbers of the paper, over all defect photos: caught = the rule the photo breaks fails,
+# flagged = it warns or fails
+defects = df[(df['broken_rule'] != '') & (df['rule'] == df['broken_rule'])]
+print(f'\nDefect photos ({len(defects)}): caught / flagged')
+print('  pipeline  %.0f%% / %.0f%%' % (100 * (defects['pipe'] == 'fail').mean(), 100 * defects['pipe'].isin(FLAG).mean()))
+print('  baseline  %.0f%% / %.0f%%  (at warn 0.4, fail 0.7)' % (100 * (defects['base'] == 'fail').mean(), 100 * defects['base'].isin(FLAG).mean()))
+
+# G. the per-rule reading the paper reports for the baseline: one fail level per rule, the 99th percentile of the
+# probability on the good photos of the other half, never below 0.5; a probability at the level fails
+floored = cal.quantile(0.99).clip(lower=0.5)
+df['base3'] = [('fail' if p >= floored[r] else 'pass') if not np.isnan(p) else None for r, p in zip(df['rule'], df['prob'])]
+good = df[df['variant'].isin(SHOULD_PASS)]
+defects = df[(df['broken_rule'] != '') & (df['rule'] == df['broken_rule'])]
+false_fails = good.groupby('rule')['base3'].apply(lambda s: (s == 'fail').mean()).sort_values(ascending=False).head(3)
+print(f'\nBaseline with one fail level per rule (p99 of good photos on the {other} half, floored at 0.5):')
+print('  good photos spared %.0f%%, defects caught %.0f%%' % (100 * photo_level('base3')[0], 100 * (defects['base3'] == 'fail').mean()))
+print('  good photos failed, top rules: ' + ', '.join(f'{rule} {share:.0%}' for rule, share in false_fails.items()))
