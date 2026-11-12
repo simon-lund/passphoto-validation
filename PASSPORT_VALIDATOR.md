@@ -266,7 +266,7 @@ The checks they replaced (BRISQUE, the solvePnP head pose, face-brightness expos
   - low contrast: 100% since 2026-11-10 (it warned only before; the review found a grey photo is not a valid photo), and a filter's stickers 100% for the same reason; skin smoothing still warns only by default.
 - **Photos that should pass:** 98% fail no rule (the old pipeline: 11%; two people's voluminous hair cost 2% until OFIQ's hair parsing joined the person mask on 2026-11-11), and 69% get no warning either: since head roll warns from 4°, a third of the good crops warn on their natural tilt (real heads tilt up to 4.7°; it was 83% clean at 6°, and `[ofiq_head_roll] warn_above = 6` in a thresholds file brings that back). The remaining fails are two borderline pitches, one roll and one background.
 
-The set comes from one studio, and most defects are synthetic, so treat these numbers as an upper bound.
+The set comes from one studio, and most defects are synthetic, so treat these numbers as an upper bound. Three levels behind them were decided after a review of 100 photos of the test half on 2026-11-10 (stickers and low contrast fail instead of warning, head roll warns from 4° instead of 6°), so the rates for those are not held-out. On the test half the pipeline fails 90% of the defect photos on the rule they break and flags 99%; without those two fails it would fail 82% (`baseline/scripts/compare_london.py data/london-eval --split test` prints the comparison with the baseline, which fails 83%).
 
 **Real photos with glasses, hats and closed eyes** (240 Open Images photos from Flickr, CC BY 2.0, labelled by Claude subagents; built with `scripts/build_openimages_set.py`). They are candid photos, not ID photos, so pose and gaze vary far more than in a photo booth.
 
