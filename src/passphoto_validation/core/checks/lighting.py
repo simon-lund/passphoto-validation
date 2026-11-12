@@ -8,7 +8,7 @@ OFIQ's natural colour on the skin and here by a tint the background and the whit
 import cv2
 import numpy as np
 
-from ..levels import judge
+from ..check import Check
 from ..models import CheckSkipped, ValidationContext
 from ..utils import mesh_points
 from .eyes import MP_LEFT_EYE, MP_RIGHT_EYE
@@ -18,7 +18,7 @@ RIGHT_EYE_CONTOUR = (33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 15
 LEFT_EYE_CONTOUR = (362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398)
 
 
-def check_exposure_level(context: ValidationContext, warn_below: float, fail_below: float):
+class Exposure(Check):
     """Check that the photo is not underexposed, from its brightest parts rather than from the skin.
 
     An ID photo needs a light background, so in a correctly exposed photo the brightest 1% of the pixels
@@ -27,29 +27,43 @@ def check_exposure_level(context: ValidationContext, warn_below: float, fail_bel
     :param warn_below: 99th percentile of the lightness L* (0-100) below which it warns.
     :param fail_below: Lightness below which it fails.
     """
-    lightness = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2LAB)[..., 0].astype(np.float32) * (100 / 255)
-    highlights = float(np.percentile(lightness, 99))
-    context.measurements['highlight_lightness'] = highlights
 
-    judge(context, highlights, warn_below=warn_below, fail_below=fail_below,
-          fail=('Photo is too dark (underexposed). Increase the lighting.', 8),
-          warn=('Photo may be too dark. Check the lighting.', 5))
+    name = 'exposure'
+
+    warn_below: float
+    fail_below: float
+
+    def measure(self, context: ValidationContext):
+        lightness = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2LAB)[..., 0].astype(np.float32) * (100 / 255)
+        highlights = float(np.percentile(lightness, 99))
+        context.measurements['highlight_lightness'] = highlights
+
+        self.judge(context, highlights,
+                   fail=('Photo is too dark (underexposed). Increase the lighting.', 8),
+                   warn=('Photo may be too dark. Check the lighting.', 5))
 
 
-def check_contrast(context: ValidationContext, warn_below: float = 40.0, fail_below: float = 30.0):
+class Contrast(Check):
     """Check overall contrast: the standard deviation of the grey levels.
 
     :param warn_below: Standard deviation (0-255 scale) below which the photo looks washed out.
     :param fail_below: Standard deviation below which it fails (the low-contrast and darkened London variants stay under 30).
     """
-    gray = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2GRAY)
 
-    contrast = gray.std()
-    context.measurements['contrast'] = float(contrast)
+    name = 'contrast'
 
-    judge(context, contrast, warn_below=warn_below, fail_below=fail_below,
-          fail=(f'Contrast is far too low (grey-level spread {contrast:.0f}). The photo looks grey.', 7),
-          warn=(f'Low contrast (grey-level spread {contrast:.0f}). Image may appear washed out.', 5))
+    warn_below: float = 40.0
+    fail_below: float = 30.0
+
+    def measure(self, context: ValidationContext):
+        gray = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2GRAY)
+
+        contrast = gray.std()
+        context.measurements['contrast'] = float(contrast)
+
+        self.judge(context, contrast,
+                   fail=(f'Contrast is far too low (grey-level spread {contrast:.0f}). The photo looks grey.', 7),
+                   warn=(f'Low contrast (grey-level spread {contrast:.0f}). Image may appear washed out.', 5))
 
 
 def eye_whites(context: ValidationContext, points: np.ndarray) -> np.ndarray:
@@ -69,8 +83,7 @@ def eye_whites(context: ValidationContext, points: np.ndarray) -> np.ndarray:
     return whites
 
 
-def check_colour_cast(context: ValidationContext, warn_above: float, fail_above: float,
-                      min_whites_share: float = 0.02, band_share: float = 0.03):
+class ColourCast(Check):
     """Check for a colour cast: a tint the background and the whites of the eyes share.
 
     OFIQ's natural colour judges the skin, and passes a cast when the tinted skin still lies in the natural
@@ -85,39 +98,49 @@ def check_colour_cast(context: ValidationContext, warn_above: float, fail_above:
     :param band_share: Width of the band next to the person left out of the background, as a share of the
         short side.
     """
-    points = mesh_points(context, iris=True)
-    mask = context.person_mask_binary
-    if mask is None:
-        raise CheckSkipped('No segmentation mask present.')
-    band = max(3, int(round(min(context.width, context.height) * band_share)))
-    distance = cv2.distanceTransform((mask == 0).astype(np.uint8), cv2.DIST_L2, 5)
-    background = (mask == 0) & (distance > band)
-    if background.sum() < 100:
-        raise CheckSkipped('No background visible.')
 
-    whites = eye_whites(context, points)
-    eye_width = np.mean([np.linalg.norm(points[eye['inner']] - points[eye['outer']]) for eye in (MP_RIGHT_EYE, MP_LEFT_EYE)])
-    whites_share = float(whites.sum() / max(1.0, eye_width ** 2))
-    context.measurements['eye_whites_share'] = whites_share
-    if whites_share < min_whites_share:
-        raise CheckSkipped('The whites of the eyes are not visible enough to judge the colour.')
+    name = 'colour_cast'
+    stops_after = ('ofiq_eyes_visible',)
 
-    lab = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2LAB).astype(np.float32)
-    a, b = lab[..., 1] - 128, lab[..., 2] - 128
-    background_colour = np.array([a[background].mean(), b[background].mean()])
-    whites_colour = np.array([a[whites].mean(), b[whites].mean()])
-    context.measurements['background_colour_a'] = float(background_colour[0])
-    context.measurements['background_colour_b'] = float(background_colour[1])
-    context.measurements['eye_whites_colour_a'] = float(whites_colour[0])
-    context.measurements['eye_whites_colour_b'] = float(whites_colour[1])
+    warn_above: float
+    fail_above: float
+    min_whites_share: float = 0.02
+    band_share: float = 0.03
 
-    chroma = np.linalg.norm(background_colour), np.linalg.norm(whites_colour)
-    agreement = float(background_colour @ whites_colour / (chroma[0] * chroma[1])) if min(chroma) > 1e-6 else 0.0
-    cast = max(agreement, 0.0) * float(min(chroma))
-    context.measurements['colour_cast'] = cast
+    def measure(self, context: ValidationContext):
+        points = mesh_points(context, iris=True)
+        mask = context.person_mask_binary
+        if mask is None:
+            raise CheckSkipped('No segmentation mask present.')
+        band = max(3, int(round(min(context.width, context.height) * self.band_share)))
+        distance = cv2.distanceTransform((mask == 0).astype(np.uint8), cv2.DIST_L2, 5)
+        background = (mask == 0) & (distance > band)
+        if background.sum() < 100:
+            raise CheckSkipped('No background visible.')
 
-    judge(context, cast, warn_above=warn_above, fail_above=fail_above,
-          fail=(f'The photo has a colour cast: the background and the whites of the eyes are tinted the '
-                f'same way (shared chroma {cast:.0f}). Colours must be natural.', 7),
-          warn=(f'The photo may have a colour cast: the background and the whites of the eyes share a '
-                f'tint (shared chroma {cast:.0f}).', 4))
+        whites = eye_whites(context, points)
+        eye_width = np.mean([np.linalg.norm(points[eye['inner']] - points[eye['outer']]) for eye in (MP_RIGHT_EYE, MP_LEFT_EYE)])
+        whites_share = float(whites.sum() / max(1.0, eye_width ** 2))
+        context.measurements['eye_whites_share'] = whites_share
+        if whites_share < self.min_whites_share:
+            raise CheckSkipped('The whites of the eyes are not visible enough to judge the colour.')
+
+        lab = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2LAB).astype(np.float32)
+        a, b = lab[..., 1] - 128, lab[..., 2] - 128
+        background_colour = np.array([a[background].mean(), b[background].mean()])
+        whites_colour = np.array([a[whites].mean(), b[whites].mean()])
+        context.measurements['background_colour_a'] = float(background_colour[0])
+        context.measurements['background_colour_b'] = float(background_colour[1])
+        context.measurements['eye_whites_colour_a'] = float(whites_colour[0])
+        context.measurements['eye_whites_colour_b'] = float(whites_colour[1])
+
+        chroma = np.linalg.norm(background_colour), np.linalg.norm(whites_colour)
+        agreement = float(background_colour @ whites_colour / (chroma[0] * chroma[1])) if min(chroma) > 1e-6 else 0.0
+        cast = max(agreement, 0.0) * float(min(chroma))
+        context.measurements['colour_cast'] = cast
+
+        self.judge(context, cast,
+                   fail=(f'The photo has a colour cast: the background and the whites of the eyes are tinted the '
+                         f'same way (shared chroma {cast:.0f}). Colours must be natural.', 7),
+                   warn=(f'The photo may have a colour cast: the background and the whites of the eyes share a '
+                         f'tint (shared chroma {cast:.0f}).', 4))

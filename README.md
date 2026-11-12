@@ -18,6 +18,37 @@ One photo goes through five stages (`src/passphoto_validation/core/validator.py`
 4. **39 checks, 36 rules.** A check is a measurement with a unit and two levels; it ends as pass, warn, fail, skipped or error with its reasons and numbers. A rule takes the worst status of the checks that cover it; the checks that did not pass are grouped into problems, one per cause. Valid means no rule fails, no check crashed, no rule skipped.
 5. **Out.** The report as JSON (pinned by `api_schema.py`), as one HTML page, or on the terminal, problems first. The one loop: when the framing is off, a 35×45 crop is planned and the checks run again on it; the verdict never depends on it.
 
+A check is a small class, written the way a layer is in PyTorch: the class declares its parameters, an instance holds its values, `measure` does the work (`core/check.py`).
+
+```python
+class Contrast(Check):
+    """Overall contrast: the standard deviation of the grey levels."""
+    name = 'contrast'              # how reports, rules and thresholds files call it
+
+    warn_below: float = 40.0       # the parameters: what the thresholds file can set
+    fail_below: float = 30.0
+
+    def measure(self, context):
+        contrast = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2GRAY).std()
+        context.measurements['contrast'] = float(contrast)
+        self.judge(context, contrast,
+                   fail=(f'Contrast is far too low (grey-level spread {contrast:.0f}).', 7),
+                   warn=(f'Low contrast (grey-level spread {contrast:.0f}).', 5))
+```
+
+The pipeline is one list of instances, `default_checks()` in `core/checks/__init__.py`, like `nn.Sequential`. Its order is the order of every report, and nothing is discovered or registered by import. Values are loaded onto it by check name, like a state dict: the table in `core/thresholds.py`, then the deployment's thresholds file.
+
+```python
+checks = Sequence(
+    Resolution(), PhotoFormat(), FaceSize(), FaceCentered(), FaceSharpness(), Contrast(), ...,
+    OfiqPose('ofiq_head_yaw', axis='yaw'),      # one class, several checks: the name belongs to the instance
+    Gaze(), RedEyes(), ...,
+)
+validator = PassportPhotoValidator(checks=default_checks() + [MyCheck()])    # a check of your own joins the list
+```
+
+A check says what it depends on: `stops_after = ('ofiq_eyes_visible',)` means it is not run once the eyes are covered, `reads = ('face_sharpness',)` that it looks at that check's result and has to come after it. A check of your own is reported with the others and a fail of it makes the photo not valid; to decide a rule of the Fotomustertafel it is named under that rule in `core/rules.py`.
+
 ## Principles
 
 1. **Every check is a measurement**: a number with a unit, a distribution on photos known to be good, and a threshold placed where that distribution ends. No check answers from a judgement it cannot show.

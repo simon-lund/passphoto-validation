@@ -7,7 +7,7 @@ from passphoto_validation.core.rules import GROUPS, RULES, Rule, evaluate_proble
 from passphoto_validation.core.validator import CHECK_DEPENDENCIES
 
 # Every check name in report order, without loading the models
-NAMES = ['face_detected'] + [name for name, _, _ in PassportPhotoValidator.registered_checks(ValidatorConfig())]
+NAMES = ['face_detected'] + PassportPhotoValidator.registered_checks(ValidatorConfig()).names()
 EYE_CHECKS = CHECK_DEPENDENCIES['ofiq_eyes_visible']
 
 

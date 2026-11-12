@@ -227,7 +227,7 @@ print(f"Score: {report['overall_score']}")
 
 ## Validation Checks
 
-The warn and fail thresholds of every check live in one table, `core/thresholds.py`, with a note on where each number came from; the validator reads it when it registers its checks, and `notebooks/evaluation.ipynb` draws the same numbers as the warn and fail lines of its panels. To change a threshold, edit it there, update the snapshot in `tests/test_thresholds.py` (it pins the table, so a change is deliberate) and re-run the notebook to see the effect. Checks without an entry run with the defaults of their function; `resolution` takes its minimums from `ValidatorConfig`. A deployment can override any parameter of any check without editing the code: `passport-validator thresholds` writes them all to a TOML file, `--thresholds` or `THRESHOLDS_FILE` reads it back, and `/v1/thresholds` shows what the API runs with (see the README). Every check has a warn level and a fail level; `false` turns a level off and `enabled = false` turns a check off. One function grades them all (`core/levels.py`), each level on its own, so a check with its warning turned off still fails.
+The warn and fail thresholds of every check live in one table, `core/thresholds.py`, with a note on where each number came from; the sequence of checks loads it (`default_checks()` in `core/checks/__init__.py`), and `notebooks/evaluation.ipynb` draws the same numbers as the warn and fail lines of its panels. To change a threshold, edit it there, update the snapshot in `tests/test_thresholds.py` (it pins the table, so a change is deliberate) and re-run the notebook to see the effect. Checks without an entry run with the defaults of their class; `resolution` takes its minimums from `ValidatorConfig`. A deployment can override any parameter of any check without editing the code: `passport-validator thresholds` writes them all to a TOML file, `--thresholds` or `THRESHOLDS_FILE` reads it back, and `/v1/thresholds` shows what the API runs with (see the README). Every check has a warn level and a fail level; `false` turns a level off and `enabled = false` turns a check off. One function grades them all (`core/levels.py`), each level on its own, so a check with its warning turned off still fails.
 
 The validator runs 39 checks (`PassportPhotoValidator.check_names()`). Each ends as `pass`, `warn`, `fail`, `skipped` (it couldn't judge the photo, e.g. no face, or OFIQ isn't installed) or `error` (it crashed, which is a bug).
 
@@ -385,7 +385,7 @@ It never adds background and never changes `is_valid` of the photo as sent; it o
    - Each module has a single responsibility
 
 4. **Extensibility**
-   - Add new validation checks in `core/validator.py`
+   - Add a new check as a class in `core/checks/` and to the list in `core/checks/__init__.py` (see the README)
    - Add new CLI commands in `cli.py`
    - Add new API endpoints in `check_api.py`
 

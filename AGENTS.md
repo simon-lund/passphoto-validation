@@ -10,7 +10,7 @@ A checker for German ID photos (the Fotomustertafel): 39 measurements (checks) f
 
 | Path | What |
 | --- | --- |
-| `src/passphoto_validation/` | the package: `core/validator.py` (the pipeline), `core/checks/` (the measurements), `core/rules.py` (rules, problems), `core/thresholds.py` (every threshold, with provenance), `cli.py`, `check_api.py`, `report_html.py` |
+| `src/passphoto_validation/` | the package: `core/validator.py` (the pipeline), `core/check.py` (what a check is: `Check`, `Sequence`), `core/checks/` (the checks as classes; `__init__.py` lists them in report order), `core/rules.py` (rules, problems), `core/thresholds.py` (every threshold, with provenance), `cli.py`, `check_api.py`, `report_html.py` |
 | `scripts/` | download and build the photo sets, run the pipeline over a set, summarise, make test photos, the review page |
 | `notebooks/` | the UI for looking at results: `pipeline_overview`, `evaluation`, `real_photos`, `stichprobe`, `api` |
 | `tests/` | pytest; the OFIQ and SigLIP tests skip when those are not installed |
@@ -37,7 +37,7 @@ uv run python scripts/review.py --set data/london-eval --split test --shuffle   
 - The London Set photos, and everything made from them (crops, variants, per-photo results, screenshots of them), never enter git and never leave `data/`. Open Images photos are CC BY and may be looked at; the London ones only for the study itself.
 - Check names, rule ids and the keys of the report are contracts: add, never rename. `tests/test_check_api.py` and `tests/test_thresholds.py` pin them.
 - A new threshold goes into `core/thresholds.py` with a note on where the number came from, the snapshot in `tests/test_thresholds.py` is updated on purpose, and `notebooks/evaluation.ipynb` is re-run. Thresholds are chosen on the odd-numbered London people (calibrate) and reported on the even-numbered ones (test).
-- A new check gets both levels (`warn_…`, `fail_…`), grades its measurement with `judge` from `core/levels.py` (never with its own `if value > fail_above`), is registered in `PassportPhotoValidator.registered_checks`, mapped in `core/rules.py`, and gets a panel in the evaluation notebook.
+- A new check is a `Check` subclass in `core/checks/` (the module docstring of `core/check.py` shows one): a `name`, its parameters as annotated class attributes with both levels (`warn_…`, `fail_…`), `stops_after` and `reads` where it depends on another check, and `measure`, which grades with `self.judge` (never with its own `if value > fail_above`). It is added to the list in `default_checks()` (`core/checks/__init__.py`), which is the order of the report; its calibrated numbers go into `core/thresholds.py`; it is mapped in `core/rules.py` and gets a panel in the evaluation notebook.
 - A change to the checks must leave the verdicts alone unless it means to move them: run `scripts/run_eval.py --out <new file>` and compare statuses, reasons, rules and problems with `data/london-eval/results.jsonl`.
 - Every error answer of a server (the check API, the review page's server) is `{"code": "<stable_snake_case>", "detail": "<text>"}`, raised as `ApiError` (`check_api.py`).
 - No third-party API inside the pipeline. The baseline in `baseline/` is the one place a photo may be sent out, and only the London Set for the study.

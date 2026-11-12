@@ -1,21 +1,21 @@
 """Passport photo validation business logic."""
 import logging
-from typing import Callable, Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import cv2
 import mediapipe as mp
 import numpy as np
 from PIL import Image
 
-from .checks import background, eyes, features, geometry, lighting, quality, retouching
-from .checks import ofiq as ofiq_checks
 from . import siglip
+from .check import Check, Sequence
+from .checks import default_checks
 from .config import ValidatorConfig
 from .crop import FRAMING_CHECKS, plan_crop
-from .models import CheckResult, CheckSkipped, Crop, PassportPhotoReport, ValidationIssue, ValidationContext
+from .models import CheckResult, Crop, PassportPhotoReport, ValidationIssue, ValidationContext
 from .ofiq import PARSING_LABELS, load_engine
 from .rules import evaluate_problems, evaluate_rules
-from .thresholds import apply_overrides, disabled_in, is_off, level_is_off, load_overrides, parameters, thresholds
+from .thresholds import apply_overrides, disabled_in, is_off, level_is_off, load_overrides, parameters
 
 logger = logging.getLogger(__name__)
 
@@ -24,44 +24,33 @@ mp_face_detection = mp.solutions.face_detection
 mp_face_mesh = mp.solutions.face_mesh
 mp_selfie_segmentation = mp.solutions.selfie_segmentation
 
-# Checks that cannot measure once another check has failed. When the root (the key) fails, the checks listed
-# under it are not run: each ends as skipped with the reason "Not judged: <the root's first reason>", a rule
-# only such checks cover ends as skipped with that reason (the photo is not valid anyway, since the root
-# fails), and the report's problem for the root lists those rules as not_judged. A root that warns, is
-# skipped or crashes stops nothing. The root still runs in list order for the report, but it is measured
-# before the first check that depends on it (see _run_checks). Names only: registered_checks() keeps the
-# check list and its order, which are part of the API contract.
-#
-# Covered eyes (dark lenses, hair, a frame) leave the eye checks nothing to measure: gaze and red_eyes would
-# read the lenses, ofiq_eyes_open lids it cannot see, glasses_glare and the SigLIP checks a lens surface,
-# colour_cast the dark lenses as eye whites, and glasses_tint judges what already fails ofiq_eyes_visible.
-CHECK_DEPENDENCIES: Dict[str, Tuple[str, ...]] = {
-    'ofiq_eyes_visible': ('ofiq_eyes_open', 'gaze', 'red_eyes', 'glasses_tint', 'glasses_glare',
-                          'siglip_glasses_glare', 'siglip_gaze', 'colour_cast'),
-}
-
-
-def _not_judged(root: CheckResult) -> str:
-    """The reason of a check left out because `root` failed."""
-    return f'Not judged: {root.reasons[0] if root.reasons else root.name + " failed."}'
+# Which checks a failed check stops, by name: {the check that failed: the checks not run after it}. Each check
+# declares it itself (`stops_after`, core/check.py); this is the default sequence's declarations read the
+# other way round, for the report's problems and for the tests. A stopped check ends as skipped with the
+# reason "Not judged: <the other's first reason>", a rule only such checks cover ends as skipped with that
+# reason (the photo is not valid anyway, since the first check fails), and the report's problem for the first
+# check lists those rules as not_judged. A check that warns, is skipped or crashes stops nothing.
+CHECK_DEPENDENCIES: Dict[str, Tuple[str, ...]] = default_checks().dependencies()
 
 
 class PassportPhotoValidator:
     """Validates passport photos against ICAO/ISO 19794-5 standards."""
 
-    def __init__(self, config: ValidatorConfig = None):
+    def __init__(self, config: ValidatorConfig = None, checks: Optional[Sequence] = None):
         """Initialize validator with configuration.
 
         :param config: A ValidatorConfig object. If None, a default config is created,
                        loading values from environment variables.
+        :param checks: The sequence of checks to run instead of the default one (core/checks: default_checks),
+                       e.g. `default_checks() + [MyCheck()]`. The configuration and the thresholds file are
+                       applied to a copy of it.
         """
         self.config = config or ValidatorConfig()
-        # The checks and the keyword arguments they run with, resolved once: the thresholds table, then the
-        # deployment's thresholds file on top (a bad file stops the validator here, not on the first photo).
-        # Checks the file turns off are not run; the rules only they cover end as not_checked
-        self._all_checks = self.registered_checks(self.config)
-        self.disabled = self.disabled_checks(self.config)
-        self._check_list = [check for check in self._all_checks if check[0] not in self.disabled]
+        # The sequence of checks with the values they run with, resolved once: the defaults of the classes,
+        # the thresholds table, the configuration, then the deployment's thresholds file on top (a bad file
+        # stops the validator here, not on the first photo). Checks the file turns off stay in the sequence
+        # but are not run; the rules only they cover end as not_checked
+        self.checks = self.registered_checks(self.config, checks)
 
         self.face_detection = mp_face_detection.FaceDetection(
             min_detection_confidence=self.config.min_detection_confidence
@@ -165,52 +154,21 @@ class PassportPhotoValidator:
         # Run checks
         # Note: Checks update the context with issues and measurements in place
         results = [CheckResult(name='face_detected', status='pass')]
-        results += self._run_checks(context)
+        results += self.checks.run(context)
         return self._generate_report(context, results), context
 
-    def _run_checks(self, context: ValidationContext) -> List[CheckResult]:
-        """Run every check and return the results in list order.
-
-        A root check (CHECK_DEPENDENCIES) is measured before the first check that depends on it, so that
-        check can be left out when the root has failed; the results, the issues and the measurements still
-        come out in list order, as if nothing had moved.
-        """
-        checks = {name: (check, kwargs) for name, check, kwargs in self._checks()}
-        root_of = {name: root for root, dependents in CHECK_DEPENDENCIES.items() for name in dependents}
-        results: Dict[str, CheckResult] = {}
-
-        def run(name: str) -> CheckResult:
-            if name not in results:
-                root = run(root_of[name]) if root_of.get(name) in checks else None
-                if root is not None and root.status == 'fail':
-                    results[name] = CheckResult(name=name, status='skipped', reasons=[_not_judged(root)])
-                else:
-                    check, kwargs = checks[name]
-                    results[name] = self._run_check(context, name, check, kwargs)
-            return results[name]
-
-        for name in checks:
-            run(name)
-        ordered = [results[name] for name in checks]
-
-        # A root measured early put its issues and measurements before its turn; restore the list order
-        position = {name: i for i, name in enumerate(checks)}
-        context.issues.sort(key=lambda issue: position.get(issue.check, -1))
-        measurements = {}
-        for result in ordered:
-            for key in result.measurements:
-                measurements.setdefault(key, context.measurements[key])
-        measurements.update({key: value for key, value in context.measurements.items() if key not in measurements})
-        context.measurements = measurements
-        return ordered
-
     def _dependencies(self) -> Dict[str, Tuple[str, ...]]:
-        """CHECK_DEPENDENCIES plus the face gate, which stops every other check; for the report's problems."""
-        return {'face_detected': tuple(name for name, _, _ in self._checks()), **CHECK_DEPENDENCIES}
+        """Which checks a failed check stops, plus the face gate, which stops every check; for the report's problems."""
+        return {'face_detected': tuple(check.name for check in self._checks()), **self.checks.dependencies()}
 
-    def _checks(self) -> List[Tuple[str, Callable, Dict]]:
-        """All checks that run once exactly one face is found, as (name, function, keyword arguments)."""
-        return self._check_list
+    def _checks(self) -> List[Check]:
+        """The checks that run once exactly one face is found: the sequence without the ones turned off."""
+        return self.checks.enabled()
+
+    @property
+    def disabled(self) -> Set[str]:
+        """The names of the checks the thresholds file turns off."""
+        return self.checks.disabled()
 
     def parameters(self) -> Dict[str, Dict]:
         """Every parameter of every check with the value this validator runs with, by check name, and whether
@@ -223,9 +181,9 @@ class PassportPhotoValidator:
                 return [None if is_off(v) else v for v in value]
             return None if is_off(value) else value
 
-        return {name: dict(enabled=name not in self.disabled,
-                           **{key: shown(name, key, value) for key, value in parameters(check, kwargs).items()})
-                for name, check, kwargs in self._all_checks}
+        return {check.name: dict(enabled=check.enabled,
+                                 **{key: shown(check.name, key, value) for key, value in parameters(check).items()})
+                for check in self.checks}
 
     @staticmethod
     def disabled_checks(config: ValidatorConfig) -> Set[str]:
@@ -235,128 +193,32 @@ class PassportPhotoValidator:
         return disabled_in(load_overrides(config.thresholds_file), source=config.thresholds_file)
 
     @classmethod
-    def registered_checks(cls, config: ValidatorConfig) -> List[Tuple[str, Callable, Dict]]:
-        """The checks that run once exactly one face is found, as (name, function, keyword arguments), with
-        the thresholds file of `config` applied. Needs no models, so the CLI can list the parameters.
+    def registered_checks(cls, config: ValidatorConfig, checks: Optional[Sequence] = None) -> Sequence:
+        """The sequence of checks with the values a validator of `config` runs with. Needs no models, so the
+        CLI can list the parameters.
 
-        The names are part of the API contract (rules refer to them): add new ones, never rename. The
-        thresholds come from core/thresholds.py, which also says where each number came from; a check
-        without an entry there runs with its function's defaults. CHECK_DEPENDENCIES says which of these
-        checks are left out once another has failed.
+        Each layer overrides the one before: the defaults of the check classes and the table in
+        core/thresholds.py (both already in `default_checks()`), the resolution limits of `config`, then the
+        thresholds file of `config`. `checks` replaces the default sequence and is left as it was given. A
+        parameter that has no value after all that stops the validator here, not on the first photo.
         """
-        checks = [
-            ('resolution', quality.check_resolution,
-             dict(min_res=config.min_res, recommended_res=config.recommended_res)),
-            ('photo_format', geometry.check_photo_format, {}),
-            ('face_size', geometry.check_face_size, {}),
-            ('face_centered', geometry.check_face_centered, {}),
-            ('face_sharpness', quality.check_face_sharpness, thresholds('face_sharpness')),
-            ('compression', quality.check_compression_blocks, thresholds('compression')),
-            ('exposure', lighting.check_exposure_level, thresholds('exposure')),
-            ('contrast', lighting.check_contrast, thresholds('contrast')),
-            ('colour_cast', lighting.check_colour_cast, thresholds('colour_cast')),
-            ('background_brightness', background.check_background_brightness, thresholds('background_brightness')),
-            ('background_uniformity', background.check_background_uniformity, {}),
-            ('background_consistency', background.check_background_consistency, {}),
-            ('background_pattern', background.check_background_pattern, thresholds('background_pattern')),
-            ('background_gradient', background.check_background_gradient, thresholds('background_gradient')),
-            ('background_shadow', background.check_background_shadow, thresholds('background_shadow')),
-            ('print_defects', quality.check_print_defects, thresholds('print_defects')),
-            ('skin_smoothing', retouching.check_skin_smoothing, thresholds('skin_smoothing')),
-            ('skin_colour_patches', retouching.check_skin_colour_patches, thresholds('skin_colour_patches')),
-            ('glare', features.check_glasses, {}),
-            *cls._ofiq_checks(),
-            ('gaze', eyes.check_gaze, thresholds('gaze')),
-            ('red_eyes', eyes.check_red_eyes, thresholds('red_eyes')),
-            ('glasses_tint', eyes.check_glasses_tint, thresholds('glasses_tint')),
-            ('glasses_glare', eyes.check_glasses_glare, thresholds('glasses_glare')),
-            # Second opinions, warn only
-            ('siglip_glasses_glare', eyes.check_glasses_glare_siglip, thresholds('siglip_glasses_glare')),
-            ('siglip_gaze', eyes.check_gaze_siglip, thresholds('siglip_gaze')),
-        ]
+        checks = checks.copy() if checks is not None else default_checks()
+        if 'resolution' in checks:
+            checks.load({'resolution': dict(min_res=config.min_res, recommended_res=config.recommended_res)})
         if config.thresholds_file:
             checks = apply_overrides(checks, load_overrides(config.thresholds_file), source=config.thresholds_file)
-        return checks
-
-    @staticmethod
-    def _ofiq_checks() -> List[Tuple[str, Callable, Dict]]:
-        """The OFIQ checks. Quality thresholds are on OFIQ's 0-100 scale; pose thresholds in degrees
-        (core/thresholds.py).
-
-        Not used, because they failed on the evaluation set: UnderExposurePrevention (scores well-lit dark
-        skin as underexposed), Sharpness (drops from 84 to 38 when a photo is shrunk by 3%),
-        CompressionArtifacts (blind to JPEG quality 4 at ID-photo resolution) and DynamicRange (doesn't
-        separate low-contrast photos).
-        """
-        def pose(name, axis):
-            return name, ofiq_checks.check_pose, dict(axis=axis, **thresholds(name))
-
-        def quality(name, measure_name, problem):
-            return name, ofiq_checks.check_quality, dict(measure_name=measure_name, problem=problem, **thresholds(name))
-
-        return [
-            pose('ofiq_head_yaw', 'yaw'),
-            pose('ofiq_head_pitch', 'pitch'),
-            pose('ofiq_head_roll', 'roll'),
-            quality('ofiq_expression', 'ExpressionNeutrality', 'Expression is not neutral'),
-            quality('ofiq_mouth_closed', 'MouthClosed', 'Mouth is open'),
-            quality('ofiq_eyes_open', 'EyesOpen', 'Eyes are not fully open'),
-            quality('ofiq_eyes_visible', 'EyesVisible', 'Eyes are covered (hair, frame or tinted lenses)'),
-            quality('ofiq_face_occlusion', 'FaceOcclusionPrevention', 'Part of the face is covered'),
-            quality('ofiq_mouth_occlusion', 'MouthOcclusionPrevention', 'The mouth is covered'),
-            quality('ofiq_head_covering', 'NoHeadCoverings', 'Head covering detected'),
-            quality('ofiq_background', 'BackgroundUniformity', 'Background is not uniform'),
-            quality('ofiq_illumination', 'IlluminationUniformity', 'Face is unevenly lit (shadows)'),
-            quality('ofiq_overexposure', 'OverExposurePrevention', 'Face is overexposed'),
-            quality('ofiq_natural_colour', 'NaturalColour', 'Colours look unnatural (colour cast)'),
-        ]
+        return checks.complete()
 
     def check_names(self) -> List[str]:
         """Names of every check a report can contain, in report order."""
-        return ['face_detected'] + [name for name, _, _ in self._checks()]
+        return ['face_detected'] + [check.name for check in self._checks()]
 
     def _gate_failed(self, context: ValidationContext, gate: ValidationIssue, reason: str) -> List[CheckResult]:
         """Record a failed face gate and mark every other check as skipped for the same reason."""
         context.issues.append(gate)
         results = [CheckResult(name='face_detected', status='fail', reasons=[gate.message])]
-        results += [CheckResult(name=name, status='skipped', reasons=[reason]) for name, _, _ in self._checks()]
+        results += [CheckResult(name=check.name, status='skipped', reasons=[reason]) for check in self._checks()]
         return results
-
-    @staticmethod
-    def _run_check(context: ValidationContext, name: str, check: Callable, kwargs: Dict) -> CheckResult:
-        """Run one check and attribute the issues and measurements it adds to it."""
-        issues_before = len(context.issues)
-        measurements_before = dict(context.measurements)
-
-        try:
-            check(context, **kwargs)
-        except CheckSkipped as skip:
-            return CheckResult(name=name, status='skipped', reasons=[str(skip)])
-        except Exception as exc:
-            logger.exception('Check %s crashed', name)
-            return CheckResult(name=name, status='error', reasons=[f'{type(exc).__name__}: {exc}'])
-
-        new_issues = context.issues[issues_before:]
-        for issue in new_issues:
-            issue.check = name
-
-        if any(issue.category == 'error' for issue in new_issues):
-            status = 'fail'
-        elif any(issue.category == 'warning' for issue in new_issues):
-            status = 'warn'
-        else:
-            status = 'pass'
-
-        measurements = {
-            key: value for key, value in context.measurements.items()
-            if measurements_before.get(key, object()) != value
-        }
-        return CheckResult(
-            name=name,
-            status=status,
-            reasons=[issue.message for issue in new_issues if issue.category != 'info'],
-            measurements=measurements,
-        )
 
     def __call__(self, image_np: np.ndarray, crop: bool = True) -> PassportPhotoReport:
         """Allow the instance to be called directly (i.e., validator(image_np))."""

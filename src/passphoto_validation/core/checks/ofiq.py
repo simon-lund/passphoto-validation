@@ -6,7 +6,8 @@ passed in from the validator are calibrated on labelled photos (see notebooks/ev
 """
 import re
 
-from ..levels import first_on, judge
+from ..check import Check
+from ..levels import first_on
 from ..models import CheckSkipped, ValidationContext
 from ..ofiq import Measure
 
@@ -17,7 +18,7 @@ def _snake(name: str) -> str:
     return re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
 
 
-def measure(context: ValidationContext, name: str) -> Measure:
+def component(context: ValidationContext, name: str) -> Measure:
     """The OFIQ component `name` for this photo, recorded in the measurements, or CheckSkipped."""
     if context.ofiq is None:
         raise CheckSkipped(context.ofiq_unavailable or 'OFIQ did not run on this photo.')
@@ -29,8 +30,7 @@ def measure(context: ValidationContext, name: str) -> Measure:
     return result
 
 
-def check_quality(context: ValidationContext, measure_name: str, problem: str,
-                  warn_below: float, fail_below: float):
+class OfiqQuality(Check):
     """Grade one OFIQ component by its 0-100 quality score.
 
     :param measure_name: OFIQ component, e.g. 'ExpressionNeutrality'.
@@ -38,24 +38,37 @@ def check_quality(context: ValidationContext, measure_name: str, problem: str,
     :param warn_below: Quality below this warns.
     :param fail_below: Quality below this fails.
     """
-    quality = measure(context, measure_name).quality
-    judge(context, quality, warn_below=warn_below, fail_below=fail_below,
-          fail=(f'{problem} (OFIQ {measure_name} {quality:.0f}/100).', 8),
-          warn=(f'{problem}? (OFIQ {measure_name} {quality:.0f}/100).', 5))
+
+    measure_name: str
+    problem: str
+    warn_below: float
+    fail_below: float
+
+    def measure(self, context: ValidationContext):
+        quality = component(context, self.measure_name).quality
+        self.judge(context, quality,
+                   fail=(f'{self.problem} (OFIQ {self.measure_name} {quality:.0f}/100).', 8),
+                   warn=(f'{self.problem}? (OFIQ {self.measure_name} {quality:.0f}/100).', 5))
 
 
-def check_pose(context: ValidationContext, axis: str, warn_above: float, fail_above: float):
+class OfiqPose(Check):
     """Grade one head pose angle from OFIQ (3DDFA-V2), in degrees.
 
     :param axis: 'yaw' (turned), 'pitch' (nodding) or 'roll' (tilted sideways).
     :param warn_above: Absolute angle above this warns.
     :param fail_above: Absolute angle above this fails.
     """
-    angle = measure(context, _POSE_MEASURES[axis]).native
-    context.measurements[f'head_{axis}_degrees_ofiq'] = angle
-    what = {'yaw': 'turned', 'pitch': 'tilted up or down', 'roll': 'tilted sideways'}[axis]
-    # The angle the message names as the limit: the warn level, or the fail level when warning is off
-    limit = first_on(warn_above, fail_above)
-    judge(context, abs(angle), warn_above=warn_above, fail_above=fail_above,
-          fail=(f'Head is {what} by {abs(angle):.1f}°' + (f' (max {limit:.0f}°).' if limit is not None else '.'), 9),
-          warn=(f'Head is slightly {what} ({abs(angle):.1f}°).', 6))
+
+    axis: str
+    warn_above: float
+    fail_above: float
+
+    def measure(self, context: ValidationContext):
+        angle = component(context, _POSE_MEASURES[self.axis]).native
+        context.measurements[f'head_{self.axis}_degrees_ofiq'] = angle
+        what = {'yaw': 'turned', 'pitch': 'tilted up or down', 'roll': 'tilted sideways'}[self.axis]
+        # The angle the message names as the limit: the warn level, or the fail level when warning is off
+        limit = first_on(self.warn_above, self.fail_above)
+        self.judge(context, abs(angle),
+                   fail=(f'Head is {what} by {abs(angle):.1f}°' + (f' (max {limit:.0f}°).' if limit is not None else '.'), 9),
+                   warn=(f'Head is slightly {what} ({abs(angle):.1f}°).', 6))

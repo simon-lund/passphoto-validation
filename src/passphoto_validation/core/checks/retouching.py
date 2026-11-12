@@ -5,7 +5,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
-from ..levels import judge
+from ..check import Check
 from ..models import CheckSkipped, ValidationContext
 from ..utils import mesh_points
 
@@ -30,9 +30,7 @@ def _texture(gray: np.ndarray, centre, half_width: float, half_height: float):
     return float(np.abs(cv2.Laplacian(gray[y0:y1, x0:x1], cv2.CV_32F)).mean())
 
 
-def check_skin_smoothing(context: ValidationContext, warn_below: float, warn_gradient_ratio_below: float = None,
-                         fail_below: float = -math.inf, fail_gradient_ratio_below: float = -math.inf,
-                         face_width: int = 192, patch: float = 0.14):
+class SkinSmoothing(Check):
     """Check that the skin keeps its texture: beauty filters and retouching flatten the cheeks and forehead
     while the eyes stay sharp.
 
@@ -52,49 +50,62 @@ def check_skin_smoothing(context: ValidationContext, warn_below: float, warn_gra
     :param fail_below: Texture ratio below which it fails; off by default.
     :param fail_gradient_ratio_below: Gradient ratio below which it fails; off by default.
     """
-    bbox = context.face_data.get('bbox')
-    if not bbox or bbox['width'] <= 0:
-        raise CheckSkipped('No face found.')
-    points = mesh_points(context)
 
-    scale = face_width / bbox['width']
-    gray = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2GRAY).astype(np.float32)
-    gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-    points = points * scale
-    half = patch * face_width / 2
+    name = 'skin_smoothing'
+    reads = ('face_sharpness',)
 
-    skin = [_texture(gray, points[index], half, half) for index in CHEEKS]
-    skin.append(_texture(gray, (points[FOREHEAD[0]] + points[FOREHEAD[1]]) / 2, half, half))
-    skin = [value for value in skin if value is not None]
-    eyes = []
-    for outer, inner in EYES:
-        width = float(np.linalg.norm(points[outer] - points[inner]))
-        eyes.append(_texture(gray, (points[outer] + points[inner]) / 2, width * 0.7, width * 0.4))
-    eyes = [value for value in eyes if value is not None]
-    if len(skin) < 2 or not eyes:
-        raise CheckSkipped('The cheeks or eyes are outside the photo.')
-    eye_texture = float(np.mean(eyes))
-    if eye_texture < 1e-3:
-        raise CheckSkipped('The eye region is flat.')
+    warn_below: float
+    warn_gradient_ratio_below: float = None
+    fail_below: float = -math.inf
+    fail_gradient_ratio_below: float = -math.inf
+    face_width: int = 192
+    patch: float = 0.14
 
-    skin_texture = float(np.median(skin))
-    ratio = skin_texture / eye_texture
-    gradient = _face_gradient(gray, _hull(gray.shape, points, _MESH.FACEMESH_FACE_OVAL))
-    gradient_ratio = skin_texture / gradient if gradient > 1e-3 else None
-    context.measurements['skin_texture'] = skin_texture
-    context.measurements['eye_texture'] = eye_texture
-    context.measurements['skin_texture_ratio'] = ratio
-    if gradient_ratio is not None:  # a flat face has no gradient to compare with
-        context.measurements['skin_gradient_ratio'] = gradient_ratio
-    finding = (f'The skin looks smoothed, as by a beauty filter (texture ratio {ratio:.2f}). The photo must not be retouched.', 4)
-    if judge(context, ratio, warn_below=warn_below, fail_below=fail_below, fail=finding, warn=finding) != 'pass':
-        return
-    blurred = any(issue.check == 'face_sharpness' and issue.category == 'error' for issue in context.issues)
-    if gradient_ratio is not None and not blurred:
-        finding = (f'The skin has lost its fine texture while the edges of the face stayed sharp, as a filter over the '
-                   f'whole face leaves it (gradient ratio {gradient_ratio:.3f}). The photo must not be retouched.', 4)
-        judge(context, gradient_ratio, warn_below=warn_gradient_ratio_below, fail_below=fail_gradient_ratio_below,
-              fail=finding, warn=finding)
+    def measure(self, context: ValidationContext):
+        bbox = context.face_data.get('bbox')
+        if not bbox or bbox['width'] <= 0:
+            raise CheckSkipped('No face found.')
+        points = mesh_points(context)
+
+        scale = self.face_width / bbox['width']
+        gray = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        points = points * scale
+        half = self.patch * self.face_width / 2
+
+        skin = [_texture(gray, points[index], half, half) for index in CHEEKS]
+        skin.append(_texture(gray, (points[FOREHEAD[0]] + points[FOREHEAD[1]]) / 2, half, half))
+        skin = [value for value in skin if value is not None]
+        eyes = []
+        for outer, inner in EYES:
+            width = float(np.linalg.norm(points[outer] - points[inner]))
+            eyes.append(_texture(gray, (points[outer] + points[inner]) / 2, width * 0.7, width * 0.4))
+        eyes = [value for value in eyes if value is not None]
+        if len(skin) < 2 or not eyes:
+            raise CheckSkipped('The cheeks or eyes are outside the photo.')
+        eye_texture = float(np.mean(eyes))
+        if eye_texture < 1e-3:
+            raise CheckSkipped('The eye region is flat.')
+
+        skin_texture = float(np.median(skin))
+        ratio = skin_texture / eye_texture
+        gradient = _face_gradient(gray, _hull(gray.shape, points, _MESH.FACEMESH_FACE_OVAL))
+        gradient_ratio = skin_texture / gradient if gradient > 1e-3 else None
+        context.measurements['skin_texture'] = skin_texture
+        context.measurements['eye_texture'] = eye_texture
+        context.measurements['skin_texture_ratio'] = ratio
+        if gradient_ratio is not None:  # a flat face has no gradient to compare with
+            context.measurements['skin_gradient_ratio'] = gradient_ratio
+        finding = (f'The skin looks smoothed, as by a beauty filter (texture ratio {ratio:.2f}). The photo must not be retouched.', 4)
+        if self.judge(context, ratio, fail=finding, warn=finding) != 'pass':
+            return
+        sharpness = context.results.get('face_sharpness')
+        blurred = sharpness is not None and sharpness.status == 'fail'
+        if gradient_ratio is not None and not blurred:
+            finding = (f'The skin has lost its fine texture while the edges of the face stayed sharp, as a filter over the '
+                       f'whole face leaves it (gradient ratio {gradient_ratio:.3f}). The photo must not be retouched.', 4)
+            self.judge(context, gradient_ratio, warn_below=self.warn_gradient_ratio_below, fail_below=self.fail_gradient_ratio_below,
+                       fail=finding, warn=finding)
 
 
 def _hull(shape, points: np.ndarray, connections, grow: int = 0) -> np.ndarray:
@@ -117,9 +128,7 @@ def _face_gradient(gray: np.ndarray, oval: np.ndarray) -> float:
     return float(np.median(magnitude)) if magnitude.size else 0.0
 
 
-def check_skin_colour_patches(context: ValidationContext, warn_share_above: float, fail_share_above: float = math.inf,
-                              chroma_distance: float = 25.0,
-                              min_patch_share: float = 0.002, face_width: int = 256):
+class SkinColourPatches(Check):
     """Check the skin for patches of a colour that isn't skin: the stickers face filters paint on (a pink
     nose, hearts, butterflies), face paint, coloured tattoos.
 
@@ -137,55 +146,65 @@ def check_skin_colour_patches(context: ValidationContext, warn_share_above: floa
     :param warn_share_above: Share of the face oval covered by foreign patches above which it warns.
     :param fail_share_above: Share above which it fails.
     """
-    bbox = context.face_data.get('bbox')
-    if not bbox or bbox['width'] <= 0:
-        raise CheckSkipped('No face found.')
-    points = mesh_points(context)
 
-    scale = face_width / bbox['width']
-    image = cv2.resize(context.image_np, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-    points = points * scale
-    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
-    chroma = lab[..., 1:] - 128  # a*, b* around 0
+    name = 'skin_colour_patches'
 
-    oval = _hull(image.shape, points, _MESH.FACEMESH_FACE_OVAL)
-    oval_area = int(oval.sum())
-    if oval_area < 100:
-        raise CheckSkipped('The face is too small to judge its colour.')
-    margin = max(1, int(round(face_width * 0.04)))
-    skin = cv2.erode(oval, np.ones((margin, margin), np.uint8))
-    if context.person_mask_binary is not None:
-        person = cv2.resize(context.person_mask_binary, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
-        skin &= person
-    eyes = np.concatenate([points[sorted({i for e in _MESH.FACEMESH_LEFT_EYE for i in e})],
-                           points[sorted({i for e in _MESH.FACEMESH_RIGHT_EYE for i in e})]])
-    skin[:int(min(image.shape[0], eyes[:, 1].max() + face_width * 0.12)), :] = 0
-    skin &= 1 - _hull(image.shape, points, _MESH.FACEMESH_LIPS, max(1, int(round(face_width * 0.05))))
-    if skin.sum() < 0.15 * oval_area:
-        raise CheckSkipped('Too little skin is visible to judge its colour.')
+    warn_share_above: float
+    fail_share_above: float = math.inf
+    chroma_distance: float = 25.0
+    min_patch_share: float = 0.002
+    face_width: int = 256
 
-    half = 0.14 * face_width / 2
-    medians = []
-    for centre in (points[CHEEKS[0]], points[CHEEKS[1]], points[CHIN]):
-        x0, x1 = int(round(centre[0] - half)), int(round(centre[0] + half))
-        y0, y1 = int(round(centre[1] - half)), int(round(centre[1] + half))
-        if 0 <= x0 < x1 <= image.shape[1] and 0 <= y0 < y1 <= image.shape[0]:
-            medians.append(np.median(chroma[y0:y1, x0:x1].reshape(-1, 2), axis=0))
-    if len(medians) < 2:
-        raise CheckSkipped('The cheeks are outside the photo.')
-    reference = np.median(np.array(medians), axis=0)
-    reference_saturation = float(np.linalg.norm(reference))
+    def measure(self, context: ValidationContext):
+        bbox = context.face_data.get('bbox')
+        if not bbox or bbox['width'] <= 0:
+            raise CheckSkipped('No face found.')
+        points = mesh_points(context)
 
-    distance = np.linalg.norm(chroma - reference, axis=2)
-    saturation = np.linalg.norm(chroma, axis=2)
-    foreign = ((distance > chroma_distance) & (saturation >= reference_saturation) & (skin > 0)).astype(np.uint8)
+        scale = self.face_width / bbox['width']
+        image = cv2.resize(context.image_np, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        points = points * scale
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
+        chroma = lab[..., 1:] - 128  # a*, b* around 0
 
-    count, labels, stats, _ = cv2.connectedComponentsWithStats(foreign, connectivity=8)
-    patches = [int(stats[index, cv2.CC_STAT_AREA]) for index in range(1, count)
-               if stats[index, cv2.CC_STAT_AREA] >= min_patch_share * oval_area]
-    share = float(sum(patches) / oval_area)
-    context.measurements['skin_foreign_share'] = share
-    context.measurements['skin_foreign_patches'] = len(patches)
-    message = (f'Patches of a colour that is not skin cover {share:.0%} of the face, as the stickers of a face '
-               f'filter or face paint do. The photo must not be retouched or filtered.')
-    judge(context, share, warn_above=warn_share_above, fail_above=fail_share_above, fail=(message, 7), warn=(message, 4))
+        oval = _hull(image.shape, points, _MESH.FACEMESH_FACE_OVAL)
+        oval_area = int(oval.sum())
+        if oval_area < 100:
+            raise CheckSkipped('The face is too small to judge its colour.')
+        margin = max(1, int(round(self.face_width * 0.04)))
+        skin = cv2.erode(oval, np.ones((margin, margin), np.uint8))
+        if context.person_mask_binary is not None:
+            person = cv2.resize(context.person_mask_binary, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
+            skin &= person
+        eyes = np.concatenate([points[sorted({i for e in _MESH.FACEMESH_LEFT_EYE for i in e})],
+                               points[sorted({i for e in _MESH.FACEMESH_RIGHT_EYE for i in e})]])
+        skin[:int(min(image.shape[0], eyes[:, 1].max() + self.face_width * 0.12)), :] = 0
+        skin &= 1 - _hull(image.shape, points, _MESH.FACEMESH_LIPS, max(1, int(round(self.face_width * 0.05))))
+        if skin.sum() < 0.15 * oval_area:
+            raise CheckSkipped('Too little skin is visible to judge its colour.')
+
+        half = 0.14 * self.face_width / 2
+        medians = []
+        for centre in (points[CHEEKS[0]], points[CHEEKS[1]], points[CHIN]):
+            x0, x1 = int(round(centre[0] - half)), int(round(centre[0] + half))
+            y0, y1 = int(round(centre[1] - half)), int(round(centre[1] + half))
+            if 0 <= x0 < x1 <= image.shape[1] and 0 <= y0 < y1 <= image.shape[0]:
+                medians.append(np.median(chroma[y0:y1, x0:x1].reshape(-1, 2), axis=0))
+        if len(medians) < 2:
+            raise CheckSkipped('The cheeks are outside the photo.')
+        reference = np.median(np.array(medians), axis=0)
+        reference_saturation = float(np.linalg.norm(reference))
+
+        distance = np.linalg.norm(chroma - reference, axis=2)
+        saturation = np.linalg.norm(chroma, axis=2)
+        foreign = ((distance > self.chroma_distance) & (saturation >= reference_saturation) & (skin > 0)).astype(np.uint8)
+
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(foreign, connectivity=8)
+        patches = [int(stats[index, cv2.CC_STAT_AREA]) for index in range(1, count)
+                   if stats[index, cv2.CC_STAT_AREA] >= self.min_patch_share * oval_area]
+        share = float(sum(patches) / oval_area)
+        context.measurements['skin_foreign_share'] = share
+        context.measurements['skin_foreign_patches'] = len(patches)
+        message = (f'Patches of a colour that is not skin cover {share:.0%} of the face, as the stickers of a face '
+                   f'filter or face paint do. The photo must not be retouched or filtered.')
+        self.judge(context, share, warn_above=self.warn_share_above, fail_above=self.fail_share_above, fail=(message, 7), warn=(message, 4))

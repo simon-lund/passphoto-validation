@@ -9,13 +9,14 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
 ASPECT = 35 / 45
-# The checks whose problems a crop can fix
+# The checks whose problems a crop can fix. The crop is planned from what face_size measured (`chin_y`,
+# `crown_y` in the report's measurements): with that check turned off or unable to measure, no crop is planned
 FRAMING_CHECKS = ('photo_format', 'face_size', 'face_centered')
 
-# Head (chin to crown) as a share of the crop height. check_face_size allows 70-80% (32-36 mm of 45);
+# Head (chin to crown) as a share of the crop height. The face_size check allows 70-80% (32-36 mm of 45);
 # the crop stays inside that with a margin, since the head is measured again on the cropped photo.
 HEAD_RANGE = (0.72, 0.79)
-# Centre of the face box as a share of the crop height from the top. check_face_centered allows 45-70%;
+# Centre of the face box as a share of the crop height from the top. The face_centered check allows 45-70%;
 # the London Set crops sit at 58-62%.
 FACE_CENTRE = 0.60
 FACE_CENTRE_RANGE = (0.47, 0.68)
@@ -44,7 +45,7 @@ def plan_crop(width: int, height: int, bbox: Dict, chin_y: float, crown_y: float
     :param width: Photo width in pixels.
     :param height: Photo height in pixels.
     :param bbox: Face box (x, y, width, height), as in the report.
-    :param chin_y: Chin height in pixels, as check_face_size measures it.
+    :param chin_y: Chin height in pixels, as the face_size check measures it.
     :param crown_y: Crown height in pixels (estimated when hair is cut off at the top).
     :return: (box, None), or (None, why no box fits).
     """

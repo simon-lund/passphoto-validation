@@ -1,13 +1,14 @@
 """Every check's thresholds in one place, with where each number came from.
 
-The validator reads this table when it registers its checks (`PassportPhotoValidator._checks`), the
-evaluation notebook draws the same numbers as the warn and fail lines of its panels (`warn_fail`), and
-PASSPORT_VALIDATOR.md points here. To change a threshold: edit it here, run the tests (`tests/test_thresholds.py`
-pins the table, so update its snapshot on purpose) and re-run `notebooks/evaluation.ipynb` to see the effect.
+The sequence of checks loads this table on top of the defaults of the check classes
+(`core/checks/__init__.py`: `default_checks`), the evaluation notebook draws the same numbers as the warn
+and fail lines of its panels (`warn_fail`), and PASSPORT_VALIDATOR.md points here. To change a threshold: edit
+it here, run the tests (`tests/test_thresholds.py` pins the table, so update its snapshot on purpose) and
+re-run `notebooks/evaluation.ipynb` to see the effect.
 
-The keyword names are those of the check functions. `warn_above` / `fail_above` mean higher is worse,
+The names are the parameters of the check classes. `warn_above` / `fail_above` mean higher is worse,
 `warn_below` / `fail_below` lower is worse, `fail_at` is a count. A check not listed here runs with the
-defaults of its function signature (`photo_format`, `face_size`, `face_centered`, `background_uniformity`,
+defaults of its class (`photo_format`, `face_size`, `face_centered`, `background_uniformity`,
 `background_consistency`, `glare`); `resolution` takes its minimums from `ValidatorConfig`, where they can
 be set per deployment.
 
@@ -25,13 +26,14 @@ as not_checked, which never blocks validity. A few levels carry older names or a
 (`OTHER_LEVELS`); `false` turns those off the same way. A parameter that was renamed keeps answering to
 its old name (`RENAMED`), so a thresholds file written earlier still loads.
 """
-import inspect
 import math
 import textwrap
 import tomllib
 from dataclasses import dataclass
 from numbers import Real
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Optional, Set, Tuple
+
+from .check import Check, Sequence
 
 
 @dataclass(frozen=True)
@@ -183,7 +185,6 @@ def warn_fail(name: str) -> Tuple[Optional[float], Optional[float]]:
 
 # --- The thresholds file: every parameter of every check, overridable per deployment
 
-Check = Tuple[str, Callable, Dict[str, Any]]  # (name, function, keyword arguments), as the validator registers them
 LEVEL_PREFIXES = ('warn_', 'fail_')
 
 # Levels the prefix does not show (they were named before the convention) or whose off value is not a single
@@ -249,19 +250,10 @@ def load_overrides(path: str) -> Dict[str, Dict[str, Any]]:
     return data
 
 
-def parameters(check: Callable, kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    """The parameters of `check` a thresholds file may set, with the values it runs with: the keyword arguments
-    the validator passes, then the function's own defaults. Names (an axis, a measure name) and debug flags are
-    not parameters."""
-    found = {}
-    for name, parameter in inspect.signature(check).parameters.items():
-        if name == 'context' or name == 'debug':
-            continue
-        value = kwargs.get(name, parameter.default)
-        if value is inspect.Parameter.empty or isinstance(value, str):
-            continue
-        found[name] = value
-    return found
+def parameters(check: Check) -> Dict[str, Any]:
+    """The parameters of `check` a thresholds file may set, with the values it runs with, in the order the
+    class declares them. A text parameter (an axis, a measure name) says what the check is and is no setting."""
+    return {key: value for key, value in check.values().items() if not isinstance(value, str)}
 
 
 def _is_number(value: Any) -> bool:
@@ -303,25 +295,26 @@ def disabled_in(overrides: Dict[str, Dict[str, Any]], source: str = 'thresholds 
     return off
 
 
-def apply_overrides(checks: List[Check], overrides: Dict[str, Dict[str, Any]], source: str = 'thresholds file') -> List[Check]:
-    """The check list with `overrides` merged into each check's keyword arguments.
+def apply_overrides(checks: Sequence, overrides: Dict[str, Dict[str, Any]], source: str = 'thresholds file') -> Sequence:
+    """A sequence of the same checks with `overrides` merged into their parameters; `checks` is left alone.
 
     Every check name, parameter name and value type is checked first, so a typo fails loudly when the
-    validator starts rather than silently keeping the default. `false` on a warn or fail level turns it off;
-    `enabled` is read by `disabled_in`, the list keeps every check.
+    validator starts rather than silently keeping the default. `false` on a warn or fail level turns it off,
+    `enabled = false` turns the check off; the sequence keeps every check.
     """
-    by_name = {name: (check, kwargs) for name, check, kwargs in checks}
-    unknown = [name for name in overrides if name not in by_name]
+    unknown = [name for name in overrides if name not in checks]
     if unknown:
-        raise ThresholdsFileError(f'{source}: no check called {", ".join(unknown)}. The checks are: {", ".join(by_name)}')
+        raise ThresholdsFileError(f'{source}: no check called {", ".join(unknown)}. The checks are: {", ".join(checks.names())}')
     merged = []
-    for name, check, kwargs in checks:
-        new_kwargs = dict(kwargs)
-        allowed = parameters(check, kwargs)
+    for check in checks:
+        name = check.name
+        new_kwargs = {}
+        allowed = parameters(check)
         for key, value in _renamed(name, overrides.get(name, {}), source).items():
             if key == 'enabled':
                 if not isinstance(value, bool):
                     raise ThresholdsFileError(f'{source}: [{name}] enabled must be true or false, not {value!r}')
+                new_kwargs['enabled'] = value
                 continue
             if key not in allowed:
                 takes = ', '.join(allowed) if allowed else 'no parameters'
@@ -343,8 +336,8 @@ def apply_overrides(checks: List[Check], overrides: Dict[str, Dict[str, Any]], s
                     wanted += ', or false to turn the level off'
                 raise ThresholdsFileError(f'{source}: [{name}] {key} must be a {wanted}, not {value!r}')
             new_kwargs[key] = tuple(value) if isinstance(current, tuple) else value
-        merged.append((name, check, new_kwargs))
-    return merged
+        merged.append(check.replace(**new_kwargs))
+    return Sequence(*merged)
 
 
 def _toml_value(value: Any) -> str:
@@ -359,27 +352,29 @@ def _toml_value(value: Any) -> str:
     return str(value)
 
 
-def to_toml(checks: List[Check], disabled: Set[str] = frozenset()) -> str:
-    """Every parameter of every check with the value it runs with, as TOML: the file to edit and pass back."""
+def to_toml(checks: Sequence, disabled: Set[str] = frozenset()) -> str:
+    """Every parameter of every check with the value it runs with, as TOML: the file to edit and pass back.
+    A check that is turned off (or named in `disabled`) is written with `enabled = false`."""
     lines = [
         '# Every parameter of every check, with the value the validator runs with.',
         '# Keep the lines to change and delete the rest, then point the validator at the file:',
         '#   uv run passport-validator validate photo.jpg --thresholds thresholds.toml',
         '#   THRESHOLDS_FILE=thresholds.toml uv run passport-validator-api',
         '# A section is a check, its keys are the parameters of that check (core/thresholds.py says where',
-        '# the calibrated numbers came from; the others are the defaults of the check functions).',
+        '# the calibrated numbers came from; the others are the defaults of the check classes).',
         '# warn_... and fail_... are the levels: false turns one off (also min_res and recommended_res of',
         '# resolution, tolerance of photo_format and vertical_range of face_centered, which are levels too).',
         '# enabled = false turns the whole check off; a rule only that check covered is then not_checked,',
         '# which never blocks validity.',
         '',
     ]
-    for name, check, kwargs in checks:
-        found = parameters(check, kwargs)
+    for check in checks:
+        name = check.name
+        found = parameters(check)
         lines.append(f'[{name}]')
         if name in THRESHOLDS:
             lines.extend(textwrap.wrap(THRESHOLDS[name].note, 100, initial_indent='# ', subsequent_indent='# '))
-        lines.append(f'enabled = {"false" if name in disabled else "true"}')
+        lines.append(f'enabled = {"false" if name in disabled or not check.enabled else "true"}')
         for key, value in found.items():
             if value is None:
                 lines.append(f'# {key}: unset')

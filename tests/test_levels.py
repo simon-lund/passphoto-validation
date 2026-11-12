@@ -61,7 +61,7 @@ def test_messages_never_name_a_level_that_is_off():
 def _pose(angle, **levels):
     context = _context()
     context.ofiq = SimpleNamespace(measures={'HeadPoseRoll': SimpleNamespace(assessed=True, native=angle, quality=50.0)})
-    ofiq_checks.check_pose(context, axis='roll', **levels)
+    ofiq_checks.OfiqPose('ofiq_head_roll', axis='roll', **levels).measure(context)
     return [(issue.category, issue.message) for issue in context.issues]
 
 
@@ -76,14 +76,14 @@ def test_the_head_pose_names_the_limit_that_is_on():
 def test_a_siglip_opinion_can_fail_with_its_warn_level_off():
     context = _context()
     context.siglip = {'gaze_aside': 2.0}
-    eyes.check_gaze_siglip(context, warn_above=math.inf, fail_above=1.0)
+    eyes.SiglipGaze(warn_above=math.inf, fail_above=1.0).measure(context)
     assert [issue.category for issue in context.issues] == ['error']
 
 
 def test_the_photo_format_can_warn_before_it_fails():
     def issues(width, height, **levels):
         context = _context(width, height)
-        geometry.check_photo_format(context, **levels)
+        geometry.PhotoFormat(**levels).measure(context)
         return [issue.category for issue in context.issues]
 
     assert issues(350, 450) == []
@@ -96,7 +96,7 @@ def test_the_vertical_position_can_fail():
     def issues(centre_y, **levels):
         context = _context()
         context.face_data = {'bbox': dict(x=100, y=centre_y - 100, width=150, height=200)}
-        geometry.check_face_centered(context, **levels)
+        geometry.FaceCentered(**levels).measure(context)
         return [(issue.category, issue.message) for issue in context.issues]
 
     assert issues(270) == []
@@ -117,9 +117,9 @@ def test_the_siglip_glare_opinion_can_fail_with_its_warn_level_off():
     landmarks[list(LANDMARK_LEFT_EYE)] = (220, 200)
     context.ofiq = SimpleNamespace(parsing=parsing, landmarks=landmarks)
     context.siglip = {'glare': 2.0}
-    eyes.check_glasses_glare_siglip(context, min_glasses_share=0.03, warn_above=math.inf, fail_above=1.0)
+    eyes.SiglipGlassesGlare(min_glasses_share=0.03, warn_above=math.inf, fail_above=1.0).measure(context)
     assert [issue.category for issue in context.issues] == ['error']
     # Both levels on: between them it warns
     context.issues.clear()
-    eyes.check_glasses_glare_siglip(context, min_glasses_share=0.03, warn_above=1.5, fail_above=3.0)
+    eyes.SiglipGlassesGlare(min_glasses_share=0.03, warn_above=1.5, fail_above=3.0).measure(context)
     assert [issue.category for issue in context.issues] == ['warning']

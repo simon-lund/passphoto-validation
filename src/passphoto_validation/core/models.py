@@ -83,7 +83,7 @@ class Problem:
       rule two failing checks break is listed under both; a warning under a rule another check fails
       lists none), or, for a skipped or crashed check, the ones it left skipped.
     - not_judged: rules skipped because this check's failure stopped the checks that cover them
-      (CHECK_DEPENDENCIES in core/validator.py; the face gate stops every check).
+      (each check's `stops_after`, core/check.py; the face gate stops every check).
     """
     check: str
     status: ProblemStatus
@@ -135,6 +135,8 @@ class ValidationContext:
     ofiq_unavailable: Optional[str] = None  # why OFIQ did not run, shown by the skipped OFIQ checks
     siglip: Optional[Dict[str, float]] = None  # SigLIP's score per question on the eye region, if it ran
     siglip_unavailable: Optional[str] = None  # why SigLIP did not run, shown by the skipped SigLIP checks
+    # The result of each check that has run on this photo so far, by name; a check may read an earlier one's
+    results: Dict[str, CheckResult] = field(default_factory=dict)
 
     @property
     def height(self) -> int:

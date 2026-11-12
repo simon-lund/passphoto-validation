@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from passphoto_validation.cli import app
 from passphoto_validation.core import PassportPhotoValidator, ValidatorConfig
+from passphoto_validation.core.checks import default_checks
 from passphoto_validation.core.utils import convert_to_bgr
 from passphoto_validation.core.thresholds import THRESHOLDS, ThresholdsFileError, parameters, thresholds, to_toml, warn_fail
 
@@ -17,26 +18,28 @@ IMAGES = pathlib.Path(__file__).parent / 'test-images'
 
 
 def _registered():
+    # What each check of a validator runs with, by name: every parameter with its value
     validator = PassportPhotoValidator()
-    return {name: kwargs for name, _, kwargs in validator._checks()}
+    return {check.name: check.values() for check in validator._checks()}
 
 
 def test_every_table_entry_is_what_its_check_runs_with():
     registered = _registered()
     for name, entry in THRESHOLDS.items():
         assert name in registered, name
-        # The check may take more keyword arguments (an axis, a measure name), never other threshold values
+        # The check may have more parameters (an axis, a measure name), never other threshold values
         assert all(registered[name].get(key) == value for key, value in entry.kwargs.items()), name
         assert entry.note
 
 
-def test_every_threshold_the_validator_passes_is_in_the_table():
+def test_every_threshold_the_validator_runs_with_is_in_the_table():
+    # A check's values differ from the defaults of its class only where the table says so: the numbers have
+    # one home. A parameter without a default has to be in the table
     threshold_keys = ('warn_', 'fail_', 'min_', 'chroma_', 'rim_')
-    for name, kwargs in _registered().items():
-        passed = {key for key in kwargs if key.startswith(threshold_keys)}
-        if name == 'resolution':  # its minimums come from ValidatorConfig
-            continue
-        assert passed <= set(thresholds(name)) if name in THRESHOLDS else not passed, name
+    for check in default_checks():
+        defaults = type(check)._declared
+        own = {key for key, value in check.values().items() if key.startswith(threshold_keys) and defaults[key] != value}
+        assert own <= set(thresholds(check.name)) if check.name in THRESHOLDS else not own, check.name
 
 
 def test_the_table_is_pinned():
@@ -105,11 +108,18 @@ def _checks(thresholds_file=None):
     return PassportPhotoValidator.registered_checks(config)
 
 
+def _set(checks):
+    # The values a sequence differs by from the defaults of its classes, by check name: what was passed as
+    # keyword arguments before the checks were classes. Text parameters (an axis) are left out
+    return {check.name: {key: value for key, value in parameters(check).items() if type(check)._declared[key] != value}
+            for check in checks}
+
+
 def test_a_thresholds_file_changes_what_the_checks_run_with(tmp_path):
     file = tmp_path / 'thresholds.toml'
     file.write_text('[colour_cast]\nfail_above = 15\n\n[background_uniformity]\nfail_above = 150\n\n'
                     '[face_centered]\nvertical_range = [0.4, 0.7]\n')
-    kwargs = {name: kw for name, _, kw in _checks(str(file))}
+    kwargs = _set(_checks(str(file)))
     assert kwargs['colour_cast'] == dict(warn_above=12, fail_above=15)
     assert kwargs['background_uniformity'] == dict(fail_above=150)
     assert kwargs['face_centered']['vertical_range'] == (0.4, 0.7)
@@ -140,17 +150,18 @@ def test_the_exported_thresholds_file_round_trips(tmp_path):
     checks = _checks()
     text = to_toml(checks)
     data = tomllib.loads(text)
-    assert set(data) == {name for name, check, kwargs in checks if parameters(check, kwargs)}
-    for name, check, kwargs in checks:
-        for key, value in kwargs.items():  # every value the validator passes is in the file, names aside
-            if isinstance(value, str):
-                continue
-            assert data[name][key] == (list(value) if isinstance(value, tuple) else value), (name, key)
+    assert set(data) == {check.name for check in checks if parameters(check)}
+    for check in checks:
+        for key, value in parameters(check).items():  # every value a check runs with is in the file, names aside
+            if isinstance(value, float) and math.isinf(value):
+                assert data[check.name][key] is False, (check.name, key)  # a level that is off
+            elif value is not None and not (isinstance(value, tuple) and math.inf in value):
+                assert data[check.name][key] == (list(value) if isinstance(value, tuple) else value), (check.name, key)
     # Feeding the file back changes nothing
     file = tmp_path / 'thresholds.toml'
     file.write_text(text)
-    resolved = [(name, parameters(check, kwargs)) for name, check, kwargs in _checks(str(file))]
-    assert resolved == [(name, parameters(check, kwargs)) for name, check, kwargs in checks]
+    resolved = [(check.name, parameters(check)) for check in _checks(str(file))]
+    assert resolved == [(check.name, parameters(check)) for check in checks]
 
 
 def test_the_cli_prints_the_thresholds_file():
@@ -166,7 +177,7 @@ def test_false_turns_a_level_off_and_the_export_says_so(tmp_path):
     file = tmp_path / 'thresholds.toml'
     file.write_text('[red_eyes]\nfail_above = false\n\n[exposure]\nwarn_below = false\n')
     checks = _checks(str(file))
-    kwargs = {name: kw for name, _, kw in checks}
+    kwargs = _set(checks)
     assert kwargs['red_eyes']['fail_above'] == math.inf and kwargs['exposure']['warn_below'] == -math.inf
     data = tomllib.loads(to_toml(checks))
     assert data['red_eyes']['fail_above'] is False and data['exposure']['warn_below'] is False
@@ -182,7 +193,8 @@ def test_enabled_false_turns_a_check_off_and_its_rule_is_not_checked(tmp_path):
     validator = PassportPhotoValidator(config)
     assert 'skin_colour_patches' not in validator.check_names()
     assert validator.parameters()['skin_colour_patches']['enabled'] is False
-    assert tomllib.loads(to_toml(validator._all_checks, validator.disabled))['skin_smoothing']['enabled'] is False
+    assert tomllib.loads(to_toml(validator.checks))['skin_smoothing']['enabled'] is False
+    assert validator.disabled == {'skin_colour_patches', 'skin_smoothing'}
     image = Image.open(IMAGES / '9.jpg')
     image.thumbnail((600, 600))
     report = validator(convert_to_bgr(image), crop=False)
@@ -214,7 +226,7 @@ def test_a_renamed_parameter_still_answers_to_its_old_name(tmp_path):
     file.write_text('[background_brightness]\nmin_brightness = 100\n\n[background_uniformity]\nvariance_threshold = 150\n\n'
                     '[background_consistency]\ncov_threshold = 0.4\n')
     checks = _checks(str(file))
-    kwargs = {name: kw for name, _, kw in checks}
+    kwargs = _set(checks)
     assert kwargs['background_brightness'] == dict(warn_below=100, fail_below=80)
     assert kwargs['background_uniformity'] == dict(fail_above=150)
     assert kwargs['background_consistency'] == dict(fail_above=0.4)
@@ -235,7 +247,7 @@ def test_false_turns_off_the_levels_with_older_names_too(tmp_path):
     file.write_text('[resolution]\nmin_res = false\nrecommended_res = false\n\n[photo_format]\ntolerance = false\n\n'
                     '[face_centered]\nvertical_range = false\n')
     checks = _checks(str(file))
-    kwargs = {name: kw for name, _, kw in checks}
+    kwargs = _set(checks)
     assert kwargs['resolution'] == dict(min_res=(0, 0), recommended_res=(0, 0))
     assert kwargs['photo_format'] == dict(tolerance=math.inf)
     assert kwargs['face_centered'] == dict(vertical_range=(-math.inf, math.inf))
@@ -246,19 +258,19 @@ def test_false_turns_off_the_levels_with_older_names_too(tmp_path):
     assert data['photo_format']['tolerance'] is False and data['photo_format']['warn_tolerance'] is False
     assert data['face_centered']['vertical_range'] is False and data['face_centered']['fail_vertical_range'] is False
     file.write_text(text)
-    assert [(name, parameters(check, kw)) for name, check, kw in _checks(str(file))] == \
-        [(name, parameters(check, kw)) for name, check, kw in checks]
+    assert [(check.name, parameters(check)) for check in _checks(str(file))] == \
+        [(check.name, parameters(check)) for check in checks]
 
 
 def test_a_range_open_at_one_end_round_trips(tmp_path):
     file = tmp_path / 'thresholds.toml'
     file.write_text('[face_centered]\nvertical_range = [0.45, inf]\n')
     checks = _checks(str(file))
-    assert {name: kw for name, _, kw in checks}['face_centered'] == dict(vertical_range=(0.45, math.inf))
+    assert _set(checks)['face_centered'] == dict(vertical_range=(0.45, math.inf))
     text = to_toml(checks)
     assert 'vertical_range = [0.45, inf]' in text
     file.write_text(text)
-    assert {name: kw for name, _, kw in _checks(str(file))}['face_centered']['vertical_range'] == (0.45, math.inf)
+    assert _checks(str(file))['face_centered'].vertical_range == (0.45, math.inf)
 
 
 def test_the_parameters_the_api_lists_are_json(tmp_path):

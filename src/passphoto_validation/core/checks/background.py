@@ -6,7 +6,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
-from ..levels import judge
+from ..check import Check
 from ..models import CheckSkipped, ValidationContext
 
 mp_selfie_segmentation = mp.solutions.selfie_segmentation
@@ -151,74 +151,71 @@ def _calculate_color_coherence_cov(image, rectangles):
     return 0.0
 
 
-def check_background_brightness(context: ValidationContext, warn_below: float = 80.0,
-                                fail_below: Optional[float] = None, debug: bool = False):
+class BackgroundBrightness(Check):
     """
     Check if the background is sufficiently bright.
 
-    :param context: The validation context with segmentation data.
     :param warn_below: Brightness (0-255) below which the check warns.
     :param fail_below: Brightness below which the check fails; None never fails.
-    :param debug: If True, returns visualization data.
     """
-    if context.person_mask_binary is None:
-        raise CheckSkipped("No segmentation mask present.")
 
-    background_mask_binary = (context.person_mask_binary == 0).astype(np.uint8)
+    name = 'background_brightness'
 
-    if np.sum(background_mask_binary) == 0:
-        raise CheckSkipped("No background visible.")
+    warn_below: float = 80.0
+    fail_below: Optional[float] = None
 
-    gray_full = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2GRAY)
-    mean_brightness = np.mean(gray_full[background_mask_binary == 1])
-    context.measurements['background_brightness'] = float(mean_brightness)
+    def measure(self, context: ValidationContext):
+        if context.person_mask_binary is None:
+            raise CheckSkipped("No segmentation mask present.")
 
-    judge(context, mean_brightness, warn_below=warn_below, fail_below=fail_below,
-          fail=(f'Background is dark (brightness: {mean_brightness:.2f}). It must be light, ideally grey.', 7),
-          warn=(f'Background is quite dark (brightness: {mean_brightness:.2f}). Consider using a lighter background.', 4))
+        background_mask_binary = (context.person_mask_binary == 0).astype(np.uint8)
 
-    if debug:
-        return {'brightness': mean_brightness}
-    return None
+        if np.sum(background_mask_binary) == 0:
+            raise CheckSkipped("No background visible.")
+
+        gray_full = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2GRAY)
+        mean_brightness = np.mean(gray_full[background_mask_binary == 1])
+        context.measurements['background_brightness'] = float(mean_brightness)
+
+        self.judge(context, mean_brightness,
+                   fail=(f'Background is dark (brightness: {mean_brightness:.2f}). It must be light, ideally grey.', 7),
+                   warn=(f'Background is quite dark (brightness: {mean_brightness:.2f}). Consider using a lighter background.', 4))
 
 
-def check_background_uniformity(context: ValidationContext, fail_above: float = 200.0, warn_above: float = math.inf, debug: bool = False):
+class BackgroundUniformity(Check):
     """
     Check for local color uniformity within background regions.
     High within-rectangle variance indicates clutter.
 
-    :param context: The validation context with segmentation data.
     :param fail_above: Within-rectangle colour variance above which it fails.
     :param warn_above: Variance above which it warns; off by default.
-    :param debug: If True, returns visualization data.
     """
-    if context.person_mask_binary is None:
-        raise CheckSkipped("No segmentation mask present.")
 
-    background_mask_binary = (context.person_mask_binary == 0).astype(np.uint8)
-    rectangles = _find_background_rectangles(background_mask_binary)
+    name = 'background_uniformity'
 
-    if len(rectangles) < 3:
-        raise CheckSkipped(f"Not enough clean background regions ({len(rectangles)}) for uniformity analysis.")
+    fail_above: float = 200.0
+    warn_above: float = math.inf
 
-    overall_range, within_rect_variance = _calculate_color_range(context.image_np, rectangles)
-    context.measurements['background_color_range'] = float(overall_range)
-    context.measurements['background_within_rect_variance'] = float(within_rect_variance)
-    context.measurements['background_rect_count'] = len(rectangles)
+    def measure(self, context: ValidationContext):
+        if context.person_mask_binary is None:
+            raise CheckSkipped("No segmentation mask present.")
 
-    finding = (f'Background has high local color variation (variance: {within_rect_variance:.2f}), indicating clutter.', 7)
-    judge(context, within_rect_variance, warn_above=warn_above, fail_above=fail_above, fail=finding, warn=finding)
+        background_mask_binary = (context.person_mask_binary == 0).astype(np.uint8)
+        rectangles = _find_background_rectangles(background_mask_binary)
 
-    if debug:
-        return {
-            'color_range': overall_range,
-            'within_rect_variance': within_rect_variance
-        }
-    return None
+        if len(rectangles) < 3:
+            raise CheckSkipped(f"Not enough clean background regions ({len(rectangles)}) for uniformity analysis.")
+
+        overall_range, within_rect_variance = _calculate_color_range(context.image_np, rectangles)
+        context.measurements['background_color_range'] = float(overall_range)
+        context.measurements['background_within_rect_variance'] = float(within_rect_variance)
+        context.measurements['background_rect_count'] = len(rectangles)
+
+        finding = (f'Background has high local color variation (variance: {within_rect_variance:.2f}), indicating clutter.', 7)
+        self.judge(context, within_rect_variance, fail=finding, warn=finding)
 
 
-def check_background_pattern(context: ValidationContext, warn_above: float, fail_above: float,
-                             min_rectangles: int = 6, blur_sigma: float = 2.0, debug: bool = False):
+class BackgroundPattern(Check):
     """
     Check for a pattern spread across the background (wallpaper, a flag, a printed backdrop).
 
@@ -227,68 +224,72 @@ def check_background_pattern(context: ValidationContext, warn_above: float, fail
     covers only some, so the median ignores them. A light blur first removes film grain and JPEG noise,
     which would otherwise read as texture on a plain wall.
 
-    :param context: The validation context with segmentation data.
     :param warn_above: Median variance above this warns.
     :param fail_above: Median variance above this fails.
     :param min_rectangles: Fewer clean rectangles than this skip the check: the median of a handful of
                            rectangles, all close to the person, is mostly hair and shoulders.
     :param blur_sigma: Gaussian blur (pixels) applied before measuring.
-    :param debug: If True, returns visualization data.
     """
-    if context.person_mask_binary is None:
-        raise CheckSkipped("No segmentation mask present.")
 
-    background_mask_binary = (context.person_mask_binary == 0).astype(np.uint8)
-    rectangles = _find_background_rectangles(background_mask_binary)
+    name = 'background_pattern'
 
-    if len(rectangles) < min_rectangles:
-        raise CheckSkipped(f"Not enough clean background regions ({len(rectangles)}) for pattern analysis.")
+    warn_above: float
+    fail_above: float
+    min_rectangles: int = 6
+    blur_sigma: float = 2.0
 
-    lab = cv2.cvtColor(cv2.GaussianBlur(context.image_np, (0, 0), blur_sigma), cv2.COLOR_BGR2LAB).astype(np.float32)
-    variances = [lab[y:y + h, x:x + w].reshape(-1, 3).var(axis=0).sum() for x, y, w, h, _ in rectangles]
-    median_variance = float(np.median(variances))
-    context.measurements['background_median_rect_variance'] = median_variance
-    context.measurements['background_rect_count'] = len(rectangles)
+    def measure(self, context: ValidationContext):
+        if context.person_mask_binary is None:
+            raise CheckSkipped("No segmentation mask present.")
 
-    judge(context, median_variance, warn_above=warn_above, fail_above=fail_above,
-          fail=(f'Background is patterned (median local variance: {median_variance:.1f}). Background must be plain.', 7),
-          warn=(f'Background may be patterned (median local variance: {median_variance:.1f}).', 4))
+        background_mask_binary = (context.person_mask_binary == 0).astype(np.uint8)
+        rectangles = _find_background_rectangles(background_mask_binary)
 
-    if debug:
-        return {'median_rect_variance': median_variance, 'rect_variances': variances, 'rectangles': rectangles}
-    return None
+        if len(rectangles) < self.min_rectangles:
+            raise CheckSkipped(f"Not enough clean background regions ({len(rectangles)}) for pattern analysis.")
+
+        lab = cv2.cvtColor(cv2.GaussianBlur(context.image_np, (0, 0), self.blur_sigma), cv2.COLOR_BGR2LAB).astype(np.float32)
+        variances = [lab[y:y + h, x:x + w].reshape(-1, 3).var(axis=0).sum() for x, y, w, h, _ in rectangles]
+        median_variance = float(np.median(variances))
+        context.measurements['background_median_rect_variance'] = median_variance
+        context.measurements['background_rect_count'] = len(rectangles)
+
+        self.judge(context, median_variance,
+                   fail=(f'Background is patterned (median local variance: {median_variance:.1f}). Background must be plain.', 7),
+                   warn=(f'Background may be patterned (median local variance: {median_variance:.1f}).', 4))
 
 
-def check_background_consistency(context: ValidationContext, fail_above: float = 0.5, warn_above: float = math.inf, debug: bool = False):
+class BackgroundConsistency(Check):
     """
     Check for consistent color transitions using Coefficient of Variation.
     Smooth gradients have low CoV; cluttered backgrounds have high CoV. So a gradient passes here, and
-    check_background_gradient reports it.
+    BackgroundGradient reports it.
 
-    :param context: The validation context with segmentation data.
     :param fail_above: Coefficient of variation above which it fails.
     :param warn_above: Coefficient above which it warns; off by default.
-    :param debug: If True, returns visualization data.
     """
-    if context.person_mask_binary is None:
-        raise CheckSkipped("No segmentation mask present.")
 
-    background_mask_binary = (context.person_mask_binary == 0).astype(np.uint8)
-    rectangles = _find_background_rectangles(background_mask_binary)
+    name = 'background_consistency'
 
-    if len(rectangles) < 3:
-        raise CheckSkipped(f"Not enough clean background regions ({len(rectangles)}) for consistency analysis.")
+    fail_above: float = 0.5
+    warn_above: float = math.inf
 
-    color_coherence_cov = _calculate_color_coherence_cov(context.image_np, rectangles)
-    context.measurements['background_color_coherence_cov'] = float(color_coherence_cov)
-    context.measurements['background_rect_count'] = len(rectangles)
+    def measure(self, context: ValidationContext):
+        if context.person_mask_binary is None:
+            raise CheckSkipped("No segmentation mask present.")
 
-    finding = (f'Background has inconsistent color transitions (CoV: {color_coherence_cov:.2f}), indicating non-uniform background.', 6)
-    judge(context, color_coherence_cov, warn_above=warn_above, fail_above=fail_above, fail=finding, warn=finding)
+        background_mask_binary = (context.person_mask_binary == 0).astype(np.uint8)
+        rectangles = _find_background_rectangles(background_mask_binary)
 
-    if debug:
-        return {'color_coherence_cov': color_coherence_cov}
-    return None
+        if len(rectangles) < 3:
+            raise CheckSkipped(f"Not enough clean background regions ({len(rectangles)}) for consistency analysis.")
+
+        color_coherence_cov = _calculate_color_coherence_cov(context.image_np, rectangles)
+        context.measurements['background_color_coherence_cov'] = float(color_coherence_cov)
+        context.measurements['background_rect_count'] = len(rectangles)
+
+        finding = (f'Background has inconsistent color transitions (CoV: {color_coherence_cov:.2f}), indicating non-uniform background.', 6)
+        self.judge(context, color_coherence_cov, fail=finding, warn=finding)
 
 
 def _background_lightness(context: ValidationContext, band_share: float = 0.03):
@@ -334,31 +335,38 @@ def _fit_plane(values: np.ndarray, where: np.ndarray, max_samples: int = 20000, 
     return plane.astype(np.float32), coefficients
 
 
-def check_background_gradient(context: ValidationContext, warn_above: float, fail_above: float):
+class BackgroundGradient(Check):
     """Check that the background doesn't run from light to dark: the lightness change across the photo of a
     plane fitted to the background, in L* (0-100).
 
     A plain backdrop under even light changes by up to about 16 L* across the photo (London Set); a gradient
     backdrop, or a lamp on one side, by 40 or more. The fit leaves out what sits in front of the backdrop
-    (an object, stray hair, a shadow next to the person, which check_background_shadow reports).
+    (an object, stray hair, a shadow next to the person, which BackgroundShadow reports).
 
     :param warn_above: L* change across the photo above which it warns.
     :param fail_above: L* change above which it fails.
     """
-    lightness, distance, _ = _background_lightness(context)
-    clear = distance > 1
-    if clear.mean() < 0.02:
-        raise CheckSkipped('Too little background to judge its gradient.')
-    fit = _fit_plane(lightness, clear, trim=6)
-    if fit is None:
-        raise CheckSkipped('Too little background to judge its gradient.')
-    _, (a, b, _) = fit
-    span = float(abs(a) + abs(b))
-    context.measurements['background_gradient'] = span
 
-    judge(context, span, warn_above=warn_above, fail_above=fail_above,
-          fail=(f'The background runs from light to dark (by {span:.0f} L* across the photo). It must be evenly lit, in one colour.', 6),
-          warn=(f'The background is lighter on one side than the other (by {span:.0f} L* across the photo).', 3))
+    name = 'background_gradient'
+
+    warn_above: float
+    fail_above: float
+
+    def measure(self, context: ValidationContext):
+        lightness, distance, _ = _background_lightness(context)
+        clear = distance > 1
+        if clear.mean() < 0.02:
+            raise CheckSkipped('Too little background to judge its gradient.')
+        fit = _fit_plane(lightness, clear, trim=6)
+        if fit is None:
+            raise CheckSkipped('Too little background to judge its gradient.')
+        _, (a, b, _) = fit
+        span = float(abs(a) + abs(b))
+        context.measurements['background_gradient'] = span
+
+        self.judge(context, span,
+                   fail=(f'The background runs from light to dark (by {span:.0f} L* across the photo). It must be evenly lit, in one colour.', 6),
+                   warn=(f'The background is lighter on one side than the other (by {span:.0f} L* across the photo).', 3))
 
 
 def _rim_shadow_depth(context: ValidationContext, plane: np.ndarray, residual: np.ndarray, distance: np.ndarray,
@@ -395,8 +403,7 @@ def _rim_shadow_depth(context: ValidationContext, plane: np.ndarray, residual: n
     return float(max(depths)) if depths else 0.0
 
 
-def check_background_shadow(context: ValidationContext, warn_above: float, fail_above: float,
-                            rim_confidence: float = 0.85, rim_texture: float = 3.0):
+class BackgroundShadow(Check):
     """Check for a shadow cast on the background next to the person: how much darker the background around
     the person is than the background farther away, in L* (0-100).
 
@@ -416,32 +423,41 @@ def check_background_shadow(context: ValidationContext, warn_above: float, fail_
     :param rim_confidence: Segmentation confidence of the tight mask whose rim is searched.
     :param rim_texture: Local lightness deviation (L*) under which a rim pixel counts as smooth backdrop.
     """
-    lightness, distance, band = _background_lightness(context)
-    near = (distance > 1) & (distance <= 3)
-    fit = _fit_plane(lightness, distance > 3, trim=6) if near.sum() >= 200 else None
-    if fit is None:
-        raise CheckSkipped('Too little background around the person to look for shadows.')
-    plane, _ = fit
-    residual = lightness - plane
 
-    bbox = context.face_data.get('bbox')
-    centre_x = bbox['x'] + bbox['width'] / 2 if bbox else context.width / 2
-    columns = np.arange(context.width)[None, :]
-    sides = (columns < centre_x, columns >= centre_x)
-    depths = []
-    for side in sides:
-        pixels = residual[near & side]
-        if len(pixels) >= 100:
-            depths.append(-np.percentile(pixels, 25))
-    if not depths:
-        raise CheckSkipped('Too little background around the person to look for shadows.')
-    band_depth = float(max(depths))
-    rim_depth = _rim_shadow_depth(context, plane, residual, distance, band, sides, rim_confidence, rim_texture)
-    context.measurements['background_shadow_depth'] = band_depth
-    context.measurements['background_shadow_rim_depth'] = rim_depth
-    context.measurements['background_shadow_share'] = float((residual[near] < -4).mean())
-    depth = max(band_depth, rim_depth)
+    name = 'background_shadow'
 
-    judge(context, depth, warn_above=warn_above, fail_above=fail_above,
-          fail=(f'A shadow falls on the background next to the person ({depth:.0f} L* darker). Light the background evenly or move away from it.', 6),
-          warn=(f'The background is darker next to the person ({depth:.0f} L*), which looks like a shadow.', 3))
+    warn_above: float
+    fail_above: float
+    rim_confidence: float = 0.85
+    rim_texture: float = 3.0
+
+    def measure(self, context: ValidationContext):
+        lightness, distance, band = _background_lightness(context)
+        near = (distance > 1) & (distance <= 3)
+        fit = _fit_plane(lightness, distance > 3, trim=6) if near.sum() >= 200 else None
+        if fit is None:
+            raise CheckSkipped('Too little background around the person to look for shadows.')
+        plane, _ = fit
+        residual = lightness - plane
+
+        bbox = context.face_data.get('bbox')
+        centre_x = bbox['x'] + bbox['width'] / 2 if bbox else context.width / 2
+        columns = np.arange(context.width)[None, :]
+        sides = (columns < centre_x, columns >= centre_x)
+        depths = []
+        for side in sides:
+            pixels = residual[near & side]
+            if len(pixels) >= 100:
+                depths.append(-np.percentile(pixels, 25))
+        if not depths:
+            raise CheckSkipped('Too little background around the person to look for shadows.')
+        band_depth = float(max(depths))
+        rim_depth = _rim_shadow_depth(context, plane, residual, distance, band, sides, self.rim_confidence, self.rim_texture)
+        context.measurements['background_shadow_depth'] = band_depth
+        context.measurements['background_shadow_rim_depth'] = rim_depth
+        context.measurements['background_shadow_share'] = float((residual[near] < -4).mean())
+        depth = max(band_depth, rim_depth)
+
+        self.judge(context, depth,
+                   fail=(f'A shadow falls on the background next to the person ({depth:.0f} L* darker). Light the background evenly or move away from it.', 6),
+                   warn=(f'The background is darker next to the person ({depth:.0f} L*), which looks like a shadow.', 3))

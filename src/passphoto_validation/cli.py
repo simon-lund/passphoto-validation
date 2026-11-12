@@ -332,12 +332,10 @@ def thresholds(thresholds: Optional[Path] = THRESHOLDS_OPTION):
     enabled = false turns a check off.
     """
     try:
-        config = _config(thresholds=thresholds)
-        checks = PassportPhotoValidator.registered_checks(config)
-        disabled = PassportPhotoValidator.disabled_checks(config)
+        checks = PassportPhotoValidator.registered_checks(_config(thresholds=thresholds))
     except ThresholdsFileError as exc:
         _thresholds_error(exc)
-    typer.echo(to_toml(checks, disabled))
+    typer.echo(to_toml(checks))
 
 
 @app.command()

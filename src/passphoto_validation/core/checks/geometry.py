@@ -2,10 +2,10 @@
 import math
 from typing import Tuple
 
-import cv2
 import numpy as np
 
-from ..levels import first_on, grade, is_on, judge, span
+from ..check import Check
+from ..levels import first_on, grade, is_on, span
 from ..models import CheckSkipped, ValidationIssue, ValidationContext
 
 # MediaPipe face mesh indices
@@ -57,8 +57,7 @@ def _crown_y(context: ValidationContext, forehead_y: float, chin_y: float) -> Tu
     return max(float(top), forehead_y - _MAX_HAIR_ABOVE_FOREHEAD * face_height), 'mask'
 
 
-def check_face_size(context: ValidationContext, warn_below: float = 0.70, warn_above: float = 0.80,
-                    fail_below: float = 0.60, fail_above: float = 0.85):
+class FaceSize(Check):
     """Check that the head (chin to crown) covers 70-80% of the photo height.
 
     The German rule is 32-36 mm of a 45 mm photo, i.e. 71-80%.
@@ -68,43 +67,50 @@ def check_face_size(context: ValidationContext, warn_below: float = 0.70, warn_a
     :param fail_below: Share below which it fails (the head is far too small).
     :param fail_above: Share above which it fails (the head is far too large).
     """
-    bbox = _bbox(context)
-    lm = _landmarks(context)
 
-    chin_y = lm[CHIN].y * context.height
-    forehead_y = lm[FOREHEAD].y * context.height
-    crown_y, crown_method = _crown_y(context, forehead_y, chin_y)
+    name = 'face_size'
 
-    head_height_ratio = (chin_y - crown_y) / context.height
-    context.measurements['face_height_ratio'] = float(bbox['height'] / context.height)
-    context.measurements['head_height_ratio'] = float(head_height_ratio)
-    context.measurements['crown_method'] = crown_method
-    context.measurements['crown_y'] = float(crown_y)
-    context.measurements['chin_y'] = float(chin_y)
+    warn_below: float = 0.70
+    warn_above: float = 0.80
+    fail_below: float = 0.60
+    fail_above: float = 0.85
 
-    level = grade(head_height_ratio, warn_below=warn_below, warn_above=warn_above,
-                  fail_below=fail_below, fail_above=fail_above)
-    # The range the message names: the warn levels, and on a side whose warn level is off the fail level
-    wanted = span(first_on(warn_below, fail_below), first_on(warn_above, fail_above),
-                  fmt=lambda share: f'{share * 100:.0f}', unit='%')
-    if level == 'fail':
-        size = 'large' if is_on(fail_above) and head_height_ratio > fail_above else 'small'
-        context.issues.append(ValidationIssue(
-            category='error',
-            message=f'Head is too {size} ({head_height_ratio * 100:.1f}% of the photo height). Should be {wanted}.',
-            severity=9
-        ))
-    elif level == 'warn':
-        context.issues.append(ValidationIssue(
-            category='warning',
-            message=f'Head height ({head_height_ratio * 100:.1f}%) is outside the optimal range ({wanted}).',
-            severity=5
-        ))
+    def measure(self, context: ValidationContext):
+        bbox = _bbox(context)
+        lm = _landmarks(context)
+
+        chin_y = lm[CHIN].y * context.height
+        forehead_y = lm[FOREHEAD].y * context.height
+        crown_y, crown_method = _crown_y(context, forehead_y, chin_y)
+
+        head_height_ratio = (chin_y - crown_y) / context.height
+        context.measurements['face_height_ratio'] = float(bbox['height'] / context.height)
+        context.measurements['head_height_ratio'] = float(head_height_ratio)
+        context.measurements['crown_method'] = crown_method
+        context.measurements['crown_y'] = float(crown_y)
+        context.measurements['chin_y'] = float(chin_y)
+
+        level = grade(head_height_ratio, warn_below=self.warn_below, warn_above=self.warn_above,
+                      fail_below=self.fail_below, fail_above=self.fail_above)
+        # The range the message names: the warn levels, and on a side whose warn level is off the fail level
+        wanted = span(first_on(self.warn_below, self.fail_below), first_on(self.warn_above, self.fail_above),
+                      fmt=lambda share: f'{share * 100:.0f}', unit='%')
+        if level == 'fail':
+            size = 'large' if is_on(self.fail_above) and head_height_ratio > self.fail_above else 'small'
+            context.issues.append(ValidationIssue(
+                category='error',
+                message=f'Head is too {size} ({head_height_ratio * 100:.1f}% of the photo height). Should be {wanted}.',
+                severity=9
+            ))
+        elif level == 'warn':
+            context.issues.append(ValidationIssue(
+                category='warning',
+                message=f'Head height ({head_height_ratio * 100:.1f}%) is outside the optimal range ({wanted}).',
+                severity=5
+            ))
 
 
-def check_face_centered(context: ValidationContext, warn_offset: float = 0.05, fail_offset: float = 0.10,
-                        vertical_range: Tuple[float, float] = (0.45, 0.70),
-                        fail_vertical_range: Tuple[float, float] = (-math.inf, math.inf)):
+class FaceCentered(Check):
     """Check that the face is horizontally centered and at a plausible height in the frame.
 
     With the head at 70-80% of the photo height, the centre of the face box sits at about 55-65% of
@@ -116,43 +122,59 @@ def check_face_centered(context: ValidationContext, warn_offset: float = 0.05, f
         which it warns.
     :param fail_vertical_range: Position outside which it fails; off by default.
     """
-    bbox = _bbox(context)
 
-    face_center_x = bbox['x'] + bbox['width'] / 2
-    face_center_y = bbox['y'] + bbox['height'] / 2
-    horizontal_offset = abs(face_center_x - context.width / 2) / context.width
-    vertical_position = face_center_y / context.height
-    context.measurements['horizontal_offset'] = float(horizontal_offset)
-    context.measurements['vertical_position'] = float(vertical_position)
+    name = 'face_centered'
 
-    judge(context, horizontal_offset, warn_above=warn_offset, fail_above=fail_offset,
-          fail=(f'Face is off centre by {horizontal_offset * 100:.0f}% of the photo width.', 7),
-          warn=('Face is not quite horizontally centered.', 5))
+    warn_offset: float = 0.05
+    fail_offset: float = 0.10
+    vertical_range: Tuple[float, float] = (0.45, 0.70)
+    fail_vertical_range: Tuple[float, float] = (-math.inf, math.inf)
 
-    (low, high), (fail_low, fail_high) = vertical_range, fail_vertical_range
-    level = grade(vertical_position, warn_below=low, warn_above=high, fail_below=fail_low, fail_above=fail_high)
-    if level != 'pass':
-        # A position past the upper end of the range that was left is too low in the frame (y runs downwards)
-        side = 'low' if vertical_position > (fail_high if level == 'fail' else high) else 'high'
-        context.issues.append(ValidationIssue(
-            category='error' if level == 'fail' else 'warning',
-            message=f'Face is positioned {"far " if level == "fail" else ""}too {side} in the frame.',
-            severity=7 if level == 'fail' else 5
-        ))
+    def measure(self, context: ValidationContext):
+        bbox = _bbox(context)
+
+        face_center_x = bbox['x'] + bbox['width'] / 2
+        face_center_y = bbox['y'] + bbox['height'] / 2
+        horizontal_offset = abs(face_center_x - context.width / 2) / context.width
+        vertical_position = face_center_y / context.height
+        context.measurements['horizontal_offset'] = float(horizontal_offset)
+        context.measurements['vertical_position'] = float(vertical_position)
+
+        self.judge(context, horizontal_offset, warn_above=self.warn_offset, fail_above=self.fail_offset,
+                   fail=(f'Face is off centre by {horizontal_offset * 100:.0f}% of the photo width.', 7),
+                   warn=('Face is not quite horizontally centered.', 5))
+
+        (low, high), (fail_low, fail_high) = self.vertical_range, self.fail_vertical_range
+        level = grade(vertical_position, warn_below=low, warn_above=high, fail_below=fail_low, fail_above=fail_high)
+        if level != 'pass':
+            # A position past the upper end of the range that was left is too low in the frame (y runs downwards)
+            side = 'low' if vertical_position > (fail_high if level == 'fail' else high) else 'high'
+            context.issues.append(ValidationIssue(
+                category='error' if level == 'fail' else 'warning',
+                message=f'Face is positioned {"far " if level == "fail" else ""}too {side} in the frame.',
+                severity=7 if level == 'fail' else 5
+            ))
 
 
-def check_photo_format(context: ValidationContext, aspect: float = 35 / 45, tolerance: float = 0.02,
-                       warn_tolerance: float = math.inf):
+class PhotoFormat(Check):
     """Check that the photo has the 35x45 mm format (width to height 7:9).
 
     :param aspect: Required width / height.
     :param tolerance: Relative deviation from it above which it fails.
     :param warn_tolerance: Deviation above which it warns; off by default.
     """
-    ratio = context.width / context.height
-    context.measurements['aspect_ratio'] = float(ratio)
-    deviation = abs(ratio / aspect - 1)
-    size = f'Photo is {context.width}x{context.height} px (ratio {ratio:.2f})'
-    judge(context, deviation, warn_above=warn_tolerance, fail_above=tolerance,
-          fail=(f'{size}; it must have the 35x45 mm format (ratio {aspect:.2f}).', 7),
-          warn=(f'{size}; the 35x45 mm format has the ratio {aspect:.2f}.', 4))
+
+    name = 'photo_format'
+
+    aspect: float = 35 / 45
+    tolerance: float = 0.02
+    warn_tolerance: float = math.inf
+
+    def measure(self, context: ValidationContext):
+        ratio = context.width / context.height
+        context.measurements['aspect_ratio'] = float(ratio)
+        deviation = abs(ratio / self.aspect - 1)
+        size = f'Photo is {context.width}x{context.height} px (ratio {ratio:.2f})'
+        self.judge(context, deviation, warn_above=self.warn_tolerance, fail_above=self.tolerance,
+                   fail=(f'{size}; it must have the 35x45 mm format (ratio {self.aspect:.2f}).', 7),
+                   warn=(f'{size}; the 35x45 mm format has the ratio {self.aspect:.2f}.', 4))

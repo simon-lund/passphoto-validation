@@ -5,7 +5,7 @@ from typing import Tuple
 import cv2
 import numpy as np
 
-from ..levels import judge
+from ..check import Check
 from ..models import CheckSkipped, ValidationContext
 from ..ofiq import LANDMARK_LEFT_EYE, LANDMARK_RIGHT_EYE, PARSING_LABELS
 from ..utils import mesh_points
@@ -28,7 +28,7 @@ def _gaze_offset(points: np.ndarray, eye: dict) -> Tuple[float, float]:
     return (iris[0] - centre_x) / width, (iris[1] - centre_y) / width
 
 
-def check_gaze(context: ValidationContext, warn_above: float, fail_above: float):
+class Gaze(Check):
     """Check that the eyes look into the camera, from where the irises sit within the eyes.
 
     Looking aside moves both irises the same way, so the offsets of both eyes are averaged; head pose is
@@ -37,18 +37,26 @@ def check_gaze(context: ValidationContext, warn_above: float, fail_above: float)
     :param warn_above: Mean horizontal or vertical iris offset (share of eye width) above which it warns.
     :param fail_above: Offset above which it fails.
     """
-    points = mesh_points(context, iris=True)
-    right = _gaze_offset(points, MP_RIGHT_EYE)
-    left = _gaze_offset(points, MP_LEFT_EYE)
-    horizontal = (right[0] + left[0]) / 2
-    vertical = (right[1] + left[1]) / 2
-    context.measurements['gaze_horizontal'] = float(horizontal)
-    context.measurements['gaze_vertical'] = float(vertical)
 
-    offset = max(abs(horizontal), abs(vertical))
-    judge(context, offset, warn_above=warn_above, fail_above=fail_above,
-          fail=('Eyes are not looking into the camera.', 8),
-          warn=('Eyes may not be looking straight into the camera.', 5))
+    name = 'gaze'
+    stops_after = ('ofiq_eyes_visible',)
+
+    warn_above: float
+    fail_above: float
+
+    def measure(self, context: ValidationContext):
+        points = mesh_points(context, iris=True)
+        right = _gaze_offset(points, MP_RIGHT_EYE)
+        left = _gaze_offset(points, MP_LEFT_EYE)
+        horizontal = (right[0] + left[0]) / 2
+        vertical = (right[1] + left[1]) / 2
+        context.measurements['gaze_horizontal'] = float(horizontal)
+        context.measurements['gaze_vertical'] = float(vertical)
+
+        offset = max(abs(horizontal), abs(vertical))
+        self.judge(context, offset,
+                   fail=('Eyes are not looking into the camera.', 8),
+                   warn=('Eyes may not be looking straight into the camera.', 5))
 
 
 def _disk(context: ValidationContext, centre, radius: float) -> np.ndarray:
@@ -57,8 +65,7 @@ def _disk(context: ValidationContext, centre, radius: float) -> np.ndarray:
     return mask.astype(bool)
 
 
-def check_red_eyes(context: ValidationContext, fail_above: float, warn_above: float = math.inf,
-                   pupil_share: float = 0.5, redder_than_skin: float = 2.0):
+class RedEyes(Check):
     """Check for red eyes (flash reflected by the retina): pupil pixels much redder than the skin below the eye.
 
     Redness is red over the larger of green and blue. Comparing with the skin keeps a warm colour cast, and
@@ -69,25 +76,35 @@ def check_red_eyes(context: ValidationContext, fail_above: float, warn_above: fl
     :param pupil_share: Pupil radius as a share of the iris radius.
     :param redder_than_skin: How many times as red as the skin below the eye a pupil pixel must be.
     """
-    points = mesh_points(context, iris=True)
-    b, g, r = (context.image_np[..., i].astype(np.float32) for i in range(3))
-    redness = r / np.maximum(1, np.maximum(g, b))
 
-    shares = []
-    for eye in (MP_RIGHT_EYE, MP_LEFT_EYE):
-        centre = points[eye['iris']]
-        width = np.linalg.norm(points[eye['inner']] - points[eye['outer']])
-        pupil = _disk(context, centre, pupil_share * np.mean([np.linalg.norm(points[i] - centre) for i in eye['ring']]))
-        skin = _disk(context, (centre[0], points[eye['lower']][1] + 0.25 * width), 0.12 * width)
-        if pupil.any() and skin.any():
-            red = (r > 50) & (redness > redder_than_skin * np.median(redness[skin]))
-            shares.append(float(red[pupil].mean()))
-    if not shares:
-        raise CheckSkipped('Could not find the pupils.')
+    name = 'red_eyes'
+    stops_after = ('ofiq_eyes_visible',)
 
-    context.measurements['red_eye_share'] = max(shares)
-    judge(context, max(shares), warn_above=warn_above, fail_above=fail_above,
-          fail=('Red eyes detected. Retake the photo without red-eye.', 8), warn=('The pupils may be red.', 5))
+    fail_above: float
+    warn_above: float = math.inf
+    pupil_share: float = 0.5
+    redder_than_skin: float = 2.0
+
+    def measure(self, context: ValidationContext):
+        points = mesh_points(context, iris=True)
+        b, g, r = (context.image_np[..., i].astype(np.float32) for i in range(3))
+        redness = r / np.maximum(1, np.maximum(g, b))
+
+        shares = []
+        for eye in (MP_RIGHT_EYE, MP_LEFT_EYE):
+            centre = points[eye['iris']]
+            width = np.linalg.norm(points[eye['inner']] - points[eye['outer']])
+            pupil = _disk(context, centre, self.pupil_share * np.mean([np.linalg.norm(points[i] - centre) for i in eye['ring']]))
+            skin = _disk(context, (centre[0], points[eye['lower']][1] + 0.25 * width), 0.12 * width)
+            if pupil.any() and skin.any():
+                red = (r > 50) & (redness > self.redder_than_skin * np.median(redness[skin]))
+                shares.append(float(red[pupil].mean()))
+        if not shares:
+            raise CheckSkipped('Could not find the pupils.')
+
+        context.measurements['red_eye_share'] = max(shares)
+        self.judge(context, max(shares),
+                   fail=('Red eyes detected. Retake the photo without red-eye.', 8), warn=('The pupils may be red.', 5))
 
 
 def _glasses(context: ValidationContext):
@@ -128,7 +145,7 @@ def _under_eye_and_cheek(context: ValidationContext, parsing: np.ndarray, eye: n
     return under_eye, cheek
 
 
-def check_glasses_tint(context: ValidationContext, min_glasses_share: float, warn_below: float, fail_below: float):
+class GlassesTint(Check):
     """Check that glasses, if worn, are not tinted: the skin just below the eyes, behind the lenses, must be
     about as light as the cheeks below the lenses.
 
@@ -139,29 +156,38 @@ def check_glasses_tint(context: ValidationContext, min_glasses_share: float, war
     :param warn_below: Under-eye to cheek lightness ratio below which it warns.
     :param fail_below: Ratio below which it fails.
     """
-    parsing, eyes, eye_distance, glasses_share = _glasses(context)
-    if glasses_share < min_glasses_share:
-        context.measurements['glasses_worn'] = False
-        return
-    context.measurements['glasses_worn'] = True
 
-    lightness = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2LAB)[..., 0].astype(np.float32)
-    ratios = []
-    for eye in eyes:
-        under_eye, cheek = _under_eye_and_cheek(context, parsing, eye, eye_distance)
-        if under_eye.sum() >= 20 and cheek.sum() >= 20:
-            ratios.append(float(np.median(lightness[under_eye]) / max(1.0, np.median(lightness[cheek]))))
-    if not ratios:
-        raise CheckSkipped('Could not measure the lenses.')
+    name = 'glasses_tint'
+    stops_after = ('ofiq_eyes_visible',)
 
-    ratio = min(ratios)
-    context.measurements['lens_brightness_ratio'] = ratio
-    judge(context, ratio, warn_below=warn_below, fail_below=fail_below,
-          fail=('Glasses appear tinted. Tinted glasses and sunglasses are not allowed.', 8),
-          warn=('Glasses may be tinted.', 5))
+    min_glasses_share: float
+    warn_below: float
+    fail_below: float
+
+    def measure(self, context: ValidationContext):
+        parsing, eyes, eye_distance, glasses_share = _glasses(context)
+        if glasses_share < self.min_glasses_share:
+            context.measurements['glasses_worn'] = False
+            return
+        context.measurements['glasses_worn'] = True
+
+        lightness = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2LAB)[..., 0].astype(np.float32)
+        ratios = []
+        for eye in eyes:
+            under_eye, cheek = _under_eye_and_cheek(context, parsing, eye, eye_distance)
+            if under_eye.sum() >= 20 and cheek.sum() >= 20:
+                ratios.append(float(np.median(lightness[under_eye]) / max(1.0, np.median(lightness[cheek]))))
+        if not ratios:
+            raise CheckSkipped('Could not measure the lenses.')
+
+        ratio = min(ratios)
+        context.measurements['lens_brightness_ratio'] = ratio
+        self.judge(context, ratio,
+                   fail=('Glasses appear tinted. Tinted glasses and sunglasses are not allowed.', 8),
+                   warn=('Glasses may be tinted.', 5))
 
 
-def check_glasses_glare(context: ValidationContext, min_glasses_share: float, warn_above: float, fail_above: float):
+class GlassesGlare(Check):
     """Check for reflections on glasses: near-white, colourless pixels within the lenses.
 
     Passes when no glasses are worn.
@@ -170,25 +196,34 @@ def check_glasses_glare(context: ValidationContext, min_glasses_share: float, wa
     :param warn_above: Share of glare pixels in the lens area above which it warns.
     :param fail_above: Share above which it fails.
     """
-    parsing, eyes, eye_distance, glasses_share = _glasses(context)
-    if glasses_share < min_glasses_share:
-        context.measurements['glasses_worn'] = False
-        return
-    context.measurements['glasses_worn'] = True
 
-    hsv = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2HSV)
-    specular = (hsv[..., 2] >= 235) & (hsv[..., 1] <= 40)
-    lens = np.zeros(parsing.shape, bool)
-    for eye in eyes:
-        lens |= _lens_area(context, parsing, eye, eye_distance)
-    if lens.sum() < 20:
-        raise CheckSkipped('Could not measure the lenses.')
+    name = 'glasses_glare'
+    stops_after = ('ofiq_eyes_visible',)
 
-    share = float(specular[lens].mean())
-    context.measurements['lens_glare_share'] = share
-    judge(context, share, warn_above=warn_above, fail_above=fail_above,
-          fail=('Reflections on the glasses. Tilt the glasses or change the lighting.', 8),
-          warn=('Possible reflections on the glasses.', 5))
+    min_glasses_share: float
+    warn_above: float
+    fail_above: float
+
+    def measure(self, context: ValidationContext):
+        parsing, eyes, eye_distance, glasses_share = _glasses(context)
+        if glasses_share < self.min_glasses_share:
+            context.measurements['glasses_worn'] = False
+            return
+        context.measurements['glasses_worn'] = True
+
+        hsv = cv2.cvtColor(context.image_np, cv2.COLOR_BGR2HSV)
+        specular = (hsv[..., 2] >= 235) & (hsv[..., 1] <= 40)
+        lens = np.zeros(parsing.shape, bool)
+        for eye in eyes:
+            lens |= _lens_area(context, parsing, eye, eye_distance)
+        if lens.sum() < 20:
+            raise CheckSkipped('Could not measure the lenses.')
+
+        share = float(specular[lens].mean())
+        context.measurements['lens_glare_share'] = share
+        self.judge(context, share,
+                   fail=('Reflections on the glasses. Tilt the glasses or change the lighting.', 8),
+                   warn=('Possible reflections on the glasses.', 5))
 
 
 def _siglip_score(context: ValidationContext, question: str, measurement: str) -> float:
@@ -199,32 +234,49 @@ def _siglip_score(context: ValidationContext, question: str, measurement: str) -
     return score
 
 
-def check_glasses_glare_siglip(context: ValidationContext, min_glasses_share: float, warn_above: float, fail_above: float = math.inf):
+class SiglipGlassesGlare(Check):
     """Second opinion on reflections on glasses: SigLIP's zero-shot score on the eye region (see core/siglip.py).
 
-    It sees soft sheens and mirrored windows that check_glasses_glare misses, but less surely, so it only
+    It sees soft sheens and mirrored windows that GlassesGlare misses, but less surely, so it only
     warns. Passes when no glasses are worn.
 
     :param min_glasses_share: Glasses pixels per squared eye distance above which glasses count as worn.
     :param warn_above: Score (logit of reflection prompts minus clean-lens prompts) above which it warns.
     :param fail_above: Score above which it fails; off by default.
     """
-    score = _siglip_score(context, 'glare', 'siglip_glare_score')
-    if _glasses(context)[3] < min_glasses_share:
-        return
-    finding = ('There may be reflections on the glasses.', 5)
-    judge(context, score, warn_above=warn_above, fail_above=fail_above, fail=finding, warn=finding)
+
+    name = 'siglip_glasses_glare'
+    stops_after = ('ofiq_eyes_visible',)
+
+    min_glasses_share: float
+    warn_above: float
+    fail_above: float = math.inf
+
+    def measure(self, context: ValidationContext):
+        score = _siglip_score(context, 'glare', 'siglip_glare_score')
+        if _glasses(context)[3] < self.min_glasses_share:
+            return
+        finding = ('There may be reflections on the glasses.', 5)
+        self.judge(context, score, fail=finding, warn=finding)
 
 
-def check_gaze_siglip(context: ValidationContext, warn_above: float, fail_above: float = math.inf):
+class SiglipGaze(Check):
     """Second opinion on gaze: SigLIP's zero-shot score on the eye region (see core/siglip.py).
 
     It judges the whole eye region instead of the iris position, and ranked averted gazes on real photos
-    better than check_gaze (AUC 0.83 against 0.76), but it only warns.
+    better than Gaze (AUC 0.83 against 0.76), but it only warns.
 
     :param warn_above: Score (logit of looking-away prompts minus looking-at-camera prompts) above which it warns.
     :param fail_above: Score above which it fails; off by default.
     """
-    score = _siglip_score(context, 'gaze_aside', 'siglip_gaze_score')
-    finding = ('The eyes may not be looking into the camera.', 5)
-    judge(context, score, warn_above=warn_above, fail_above=fail_above, fail=finding, warn=finding)
+
+    name = 'siglip_gaze'
+    stops_after = ('ofiq_eyes_visible',)
+
+    warn_above: float
+    fail_above: float = math.inf
+
+    def measure(self, context: ValidationContext):
+        score = _siglip_score(context, 'gaze_aside', 'siglip_gaze_score')
+        finding = ('The eyes may not be looking into the camera.', 5)
+        self.judge(context, score, fail=finding, warn=finding)
