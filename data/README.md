@@ -1,6 +1,6 @@
 # The photo sets
 
-Everything in this folder except this file, `.gitignore` and `london-eval/reviews.jsonl` is ignored by git. The photos are fetched and built by the scripts in `../scripts/`; `../reproduce.sh` runs them in order. Paths below are relative to the repository root.
+Everything in this folder except this file and `.gitignore` is ignored by git. The photos are fetched and built by the scripts in `../scripts/`; `../reproduce.sh` runs them in order. Paths below are relative to the repository root.
 
 | Folder | What | How it gets here |
 | --- | --- | --- |
@@ -8,7 +8,7 @@ Everything in this folder except this file, `.gitignore` and `london-eval/review
 | `data/london-eval/` | The evaluation set built from it: 2,856 photos (per person the compliant 35×45 crop, the real smiling and 3/4 photos, 24 synthetic variants), `manifest.csv` (file, identity, split, variant, broken_rule). Odd ids are the calibrate split, even ids the test split. | `uv run python scripts/build_eval_set.py --source data/london --out data/london-eval` |
 | `data/london-eval/results.jsonl` | The pipeline's verdict on every photo: every check, every rule, the problems. | `uv run python scripts/run_eval.py --set data/london-eval` (27 minutes with 4 workers on a 20-thread desktop CPU) |
 | `data/london-eval/results_decisions.jsonl` | The baseline's verdicts (`../baseline/`, OpenAI's Decisions API, $2 per run). | `cd baseline && uv run passphoto-decisions batch ../data/london-eval --yes` |
-| `data/london-eval/reviews.jsonl` | Answers given on the review page (`scripts/review.py`): file, right or wrong, rules marked wrong, comment, the verdict as shown. Tracked. | `uv run python scripts/review.py --set data/london-eval --split test --shuffle` |
+| `data/london-eval/reviews.jsonl` | Answers given on the review page (`scripts/review.py`): file, right or wrong, rules marked wrong, comment, the verdict as shown. Not tracked: they are per-photo results. | `uv run python scripts/review.py --set data/london-eval --split test --shuffle` |
 | `data/openimages/` | 240 real candid photos from Open Images (Flickr, CC BY 2.0) with glasses, hats and closed eyes: `eval/` (the photos, `manifest.csv`, `credits.csv`, `vlm_labels.jsonl`, `results.jsonl`), `meta/` (Google's metadata), `raw/`. | `uv run python scripts/build_openimages_set.py --meta data/openimages/meta --out data/openimages/eval --per-group 60` |
 | `data/test-photos/` | A small labelled set from any folder of frontal portraits, for a quick look. | `uv run python scripts/make_test_photos.py --source data/london/neutral_front --out data/test-photos --count 100` |
 | `data/stichprobe/` | Executed copies of `notebooks/stichprobe.ipynb` (HTML), when exported. | the notebook |

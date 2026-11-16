@@ -16,7 +16,7 @@ A checker for German ID photos (the Fotomustertafel): 39 measurements (checks) f
 | `tests/` | pytest; the OFIQ and SigLIP tests skip when those are not installed |
 | `third_party/OFIQ-Project/` | git submodule, pinned at v1.2.1; `install.sh` builds it in place (its build and models are untracked) |
 | `baseline/` | the Decisions-API baseline the pipeline is measured against; its own package and README |
-| `data/` | the photo sets; ignored by git except `README.md` and `london-eval/reviews.jsonl` |
+| `data/` | the photo sets and everything made from them, the review answers included; ignored by git except `README.md` |
 | `docs/` | the architecture map and the report image |
 
 ## Commands
