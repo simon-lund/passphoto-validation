@@ -123,10 +123,12 @@ THRESHOLDS: Dict[str, Thresholds] = {
     # the Open Images set (notebooks/real_photos.ipynb)
     'siglip_glasses_glare': Thresholds(
         dict(min_glasses_share=0.03, warn_above=-1.12),
-        'SigLIP\'s "glasses with glare" against "clean lenses"; 37% of real reflections caught, 15% false'),
+        'SigLIP\'s "glasses with glare" against "clean lenses"; on clear glasses it flags 27% of real reflections, 9% '
+        'false; with glasses_glare the rule catches 40%, 15% false (2026-11-16)'),
     'siglip_gaze': Thresholds(
         dict(warn_above=-0.33),
-        'SigLIP\'s "eyes looking away" against "into the camera"; 80% of real averted gaze caught, 28% false'),
+        'SigLIP\'s "eyes looking away" against "into the camera"; it flags 70% of real averted gaze, 22% false; '
+        'with gaze the rule catches 82%, 29% false (2026-11-16)'),
 
     # --- OFIQ (ISO/IEC 29794-5). Pose in degrees; quality measures on OFIQ's 0-100 scale, higher is better.
     # The rates on real photos in these notes are shares of the photos the check judged (scripts/score_labels.py)

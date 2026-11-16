@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # From a clone to the evaluation numbers the docs claim, in one run. Safe to run again: the install, the
 # London download and the evaluation set are kept when they are there. The pipeline runs again every time
-# (about 17 minutes), because its results depend on the code and the thresholds as they are now.
+# (about half an hour), because its results depend on the code and the thresholds as they are now.
 #
 #   ./reproduce.sh                   install, the London Set, the evaluation set, the pipeline's results, the report
 #   ./reproduce.sh --with-openimages also the 240 real photos from Open Images (needs Google's metadata; see the script)
 #   ./reproduce.sh --with-baseline   also the Decisions-API baseline (baseline/; needs OPENAI_API_KEY in baseline/.env, about $2)
 #   ./reproduce.sh --skip-install    the environment and OFIQ are already there
 #
-# What it takes, on a desktop CPU: the OFIQ build about 15 minutes (once), the London download 136 MB, the
-# evaluation set a few minutes, the pipeline over 2,856 photos about 17 minutes with 4 workers.
+# What it takes, on a 20-thread desktop CPU (measured from a fresh clone on 2026-11-16): the OFIQ build 9 minutes
+# (once; up to 15 on slower machines), the London download 136 MB, the evaluation set 2 minutes, the pipeline over
+# 2,856 photos 27 minutes with 4 workers; 38 minutes in all.
 # The photos stay in data/ and never enter git (data/README.md).
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,7 +21,7 @@ for arg in "$@"; do
     --with-openimages) WITH_OPENIMAGES=1 ;;
     --with-baseline) WITH_BASELINE=1 ;;
     --skip-install) SKIP_INSTALL=1 ;;
-    -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "reproduce.sh: unknown option $arg (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -52,7 +53,7 @@ else
 fi
 
 # 3. The pipeline over every photo, then the report the docs quote
-say "Running the pipeline over the evaluation set (about 17 minutes with 4 workers)"
+say "Running the pipeline over the evaluation set (about half an hour with 4 workers)"
 uv run --inexact python scripts/run_eval.py --set data/london-eval --workers 4
 say "Per rule and per check, test split (compare with PASSPORT_VALIDATOR.md, 'How well it works')"
 uv run --inexact --extra test python scripts/eval_report.py --set data/london-eval --split test
