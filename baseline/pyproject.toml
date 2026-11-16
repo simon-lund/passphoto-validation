@@ -5,7 +5,7 @@ description = "The German ID photo rules judged by OpenAI's Decisions API: the b
 readme = "README.md"
 license = { text = "EUPL-1.2" }
 authors = [
-    { name = "Simon Lund", email = "41208671+simon-lund@users.noreply.github.com" }
+    { name = "Simon Lund" }
 ]
 requires-python = ">=3.12"
 dependencies = [

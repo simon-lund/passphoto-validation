@@ -5,7 +5,7 @@ description = "Checks a photo against the German ID photo rules (the Fotomustert
 keywords = ["passport photo", "ID photo", "Fotomustertafel", "ISO/IEC 29794-5", "OFIQ"]
 readme = "README.md"
 authors = [
-    {name = "Simon Lund", email = "41208671+simon-lund@users.noreply.github.com"},
+    {name = "Simon Lund"},
 ]
 # MediaPipe has no wheels for newer Pythons yet (.python-version pins 3.12)
 requires-python = ">=3.12"
