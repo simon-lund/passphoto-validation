@@ -1,5 +1,7 @@
 # passphoto-validation
 
+> **An ongoing experiment.** The checks, thresholds and measured numbers still change, and nothing here is a stable release. It is not an official tool either: a photo it calls valid can still be refused by the authority.
+
 Checks a photo against the German ID photo rules (the Fotomustertafel) and says which rules it passes, which it fails and why. 39 checks feed 36 rules. Most face measurements come from [OFIQ](https://github.com/BSI-OFIQ/OFIQ-Project), the BSI's implementation of ISO/IEC 29794-5, the rest from MediaPipe and OpenCV. The answer comes as JSON or as a self-contained HTML report, with a proposed 35×45 mm crop when the framing is off.
 
 ![The HTML report for a sample photo: the verdict, the rules to fix with the reason for each, and the planned 35×45 crop that would make the photo valid](docs/report.png)
